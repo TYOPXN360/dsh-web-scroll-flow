@@ -171,6 +171,9 @@ export class TypewriterController {
     const markdowns = this.markdowns()
     const live = new Set<HTMLElement>(markdowns)
     const loading = performance.now() - this.loadedAt < this.options.loadGrace
+    // 只有会话正在运行（Deep diving 状态行存在）才可能流式；刷新 / 历史
+    // 加载没有运行状态，即使有文本变化也绝不启动打字机。
+    const running = this.hasRunningTurn()
     for (const markdown of markdowns) {
       const text = markdown.textContent ?? ''
       const isNewNode = !this.baselineMarkdowns.has(markdown)
@@ -193,6 +196,8 @@ export class TypewriterController {
         this.ensureStreaming(existing)
         continue
       }
+      // 没有运行状态时，任何文本变化都视为历史加载，不启动。
+      if (!running) continue
       // 宽限期内的变化都视为历史加载，不启动。
       if (loading) continue
       // 宽限期后出现的新节点：真实新消息，即使整段一次到位也启动打字
@@ -210,6 +215,11 @@ export class TypewriterController {
     for (const [markdown, session] of this.sessions) {
       if (!markdown.isConnected || !live.has(markdown)) this.teardownSession(session)
     }
+  }
+
+  /** 会话是否正在运行（Deep diving 状态行存在）。 */
+  private hasRunningTurn(): boolean {
+    return this.flow.querySelector('[role="status"]') !== null
   }
 
   private messageContainerOf(el: HTMLElement): Element | null {

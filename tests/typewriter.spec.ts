@@ -22,6 +22,11 @@ function makeMarkdownFlow(
     markdowns.push(markdown)
     shells.push(shell)
   }
+  // 模拟正在运行的会话：Deep diving 状态行存在，打字机才允许启动。
+  const status = document.createElement('div')
+  status.setAttribute('role', 'status')
+  status.textContent = 'Deep diving...'
+  flow.append(status)
   document.body.append(flow)
   return { flow, markdowns, shells }
 }
@@ -246,6 +251,10 @@ describe('TypewriterController', () => {
     inner.className = '_root_9cl6j_3'
     item.append(inner)
     flow.append(item)
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    status.textContent = 'Deep diving...'
+    flow.append(status)
     document.body.append(flow)
 
     const typewriter = new TypewriterController(flow, {
@@ -307,6 +316,30 @@ describe('TypewriterController', () => {
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
     expect(typewriter.active).toBe(true)
     expect(newShell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).not.toBeNull()
+    typewriter.dispose()
+  })
+
+  it('没有运行状态（历史加载）时绝不启动打字机', async () => {
+    const flow = document.createElement('div')
+    flow.setAttribute('data-chat-flow', '')
+    document.body.append(flow)
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    // 无 Deep diving 状态行：新增节点 / 整段文本都不启动。
+    const shell = document.createElement('div')
+    const md = document.createElement('div')
+    md.className = '_markdown_abc'
+    md.textContent = '历史消息完整文本'
+    shell.append(md)
+    flow.append(shell)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.active).toBe(false)
+    expect(shell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).toBeNull()
     typewriter.dispose()
   })
 
