@@ -1,6 +1,7 @@
 /**
- * 滚动动效设置：动画档位（关闭 / 优雅 / 适中）与弹簧开关。
- * 值通过 settingsScope 持久化到 Host；无 settingsScope 时保持进程内。
+ * 滚动动效设置：动画档位（关闭 / 优雅 / 适中）、弹簧开关与打字机开关。
+ * 持久化主通道是浏览器 localStorage（与透明 UI 等纯 UI 插件一致，刷新
+ * 即可恢复）；若 Host settingsScope 可用，也同步写入 Host 作为增强。
  */
 
 import {
@@ -26,6 +27,9 @@ export const DEFAULT_FOLLOW_MODE: FollowMode = 'medium'
 export const DEFAULT_BOUNCE_ENABLED = true
 export const DEFAULT_TYPEWRITER_ENABLED = true
 
+/** localStorage 持久化键（单一 JSON 对象）。 */
+const STORAGE_KEY = 'dsh-web-scroll-flow.settings'
+
 /** 适中：当前幅度（200ms 大距离平滑）。 */
 const MEDIUM_FOLLOW: FollowOptions = { duration: 200 }
 /** 优雅：更慢一点往上推。 */
@@ -40,9 +44,40 @@ export function followOptionsForMode(mode: FollowMode): FollowOptions | null {
   }
 }
 
+function isFollowMode(value: unknown): value is FollowMode {
+  return value === 'off' || value === 'gentle' || value === 'medium'
+}
+
+/** 从 localStorage 读取偏好；损坏或缺失返回 undefined。 */
+function readLocalSettings(): ScrollFlowSettings | undefined {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw === null) return undefined
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null) return undefined
+    const section = value as Partial<ScrollFlowSettings>
+    if (!isFollowMode(section.followMode)
+      || typeof section.bounceEnabled !== 'boolean'
+      || typeof section.typewriterEnabled !== 'boolean') {
+      return undefined
+    }
+    return section as ScrollFlowSettings
+  } catch {
+    return undefined
+  }
+}
+
+function writeLocalSettings(section: ScrollFlowSettings): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(section))
+  } catch {
+    // localStorage 不可用（隐私模式等）时静默跳过，设置仍进程内生效。
+  }
+}
+
 /**
- * 滚动动效偏好：持有 live 值，订阅持久化 scope 采纳 Host 值，
- * 用户修改时先发布再写 Host。
+ * 滚动动效偏好：live 值先由 localStorage 恢复，用户修改同时写
+ * localStorage 与 Host scope（若可用）。
  */
 export class ScrollFlowPolicy {
   readonly followMode: SnapshotStore<FollowMode> = createSnapshotStore(DEFAULT_FOLLOW_MODE)
@@ -51,20 +86,35 @@ export class ScrollFlowPolicy {
   private readonly host: SettingsScope<ScrollFlowSettings> | undefined
 
   /**
-   * @param host - durable preference scope；缺失时保持进程内默认值。
+   * @param host - 可选 Host 持久化 scope；localStorage 始终是主通道。
    */
   constructor(host?: SettingsScope<ScrollFlowSettings>) {
     this.host = host
+    const local = readLocalSettings()
+    if (local !== undefined) {
+      this.followMode.set(local.followMode)
+      this.bounceEnabled.set(local.bounceEnabled)
+      this.typewriterEnabled.set(local.typewriterEnabled)
+    }
     if (host !== undefined) {
       host.subscribe(() => { this.adopt(host) })
       this.adopt(host)
     }
   }
 
+  private persist(): void {
+    writeLocalSettings({
+      followMode: this.followMode.getSnapshot(),
+      bounceEnabled: this.bounceEnabled.getSnapshot(),
+      typewriterEnabled: this.typewriterEnabled.getSnapshot(),
+    })
+  }
+
   /** 切换自动滚动动画档位（关闭 / 优雅 / 适中）。 */
   setFollowMode(mode: FollowMode): void {
     if (this.followMode.getSnapshot() === mode) return
     this.followMode.set(mode)
+    this.persist()
     void this.host?.set(FOLLOW_MODE_FIELD, mode)
   }
 
@@ -72,6 +122,7 @@ export class ScrollFlowPolicy {
   setBounceEnabled(enabled: boolean): void {
     if (this.bounceEnabled.getSnapshot() === enabled) return
     this.bounceEnabled.set(enabled)
+    this.persist()
     void this.host?.set(BOUNCE_ENABLED_FIELD, enabled)
   }
 
@@ -79,21 +130,15 @@ export class ScrollFlowPolicy {
   setTypewriterEnabled(enabled: boolean): void {
     if (this.typewriterEnabled.getSnapshot() === enabled) return
     this.typewriterEnabled.set(enabled)
+    this.persist()
     void this.host?.set(TYPEWRITER_ENABLED_FIELD, enabled)
   }
 
   private adopt(host: SettingsScope<ScrollFlowSettings>): void {
     const section = host.getSnapshot().value
     if (section === undefined) return
-    const mode = section.followMode
-    if (mode === 'off' || mode === 'gentle' || mode === 'medium') {
-      this.followMode.set(mode)
-    }
-    if (typeof section.bounceEnabled === 'boolean') {
-      this.bounceEnabled.set(section.bounceEnabled)
-    }
-    if (typeof section.typewriterEnabled === 'boolean') {
-      this.typewriterEnabled.set(section.typewriterEnabled)
-    }
+    if (isFollowMode(section.followMode)) this.followMode.set(section.followMode)
+    if (typeof section.bounceEnabled === 'boolean') this.bounceEnabled.set(section.bounceEnabled)
+    if (typeof section.typewriterEnabled === 'boolean') this.typewriterEnabled.set(section.typewriterEnabled)
   }
 }
