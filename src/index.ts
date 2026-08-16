@@ -8,6 +8,9 @@ import {
 
 export const name = 'dsh-web-scroll-flow'
 
+/** 静态声明 settings 服务依赖：cordis 先确保服务 ready 再执行 apply。 */
+export const inject = ['settings']
+
 const NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/
 
 /** 校验并品牌化 settings namespace（与 dsh-settings 的运行时规则一致）。 */
@@ -21,13 +24,11 @@ function settingsNamespace(value: string): SettingsNamespace {
 /**
  * 节点半入口：注册浏览器设置项的 Host section，使 General 设置行写入的
  * 偏好持久化到用户设置文档。滚动动效本身在浏览器半（/client）。
- * @param ctx - 主机侧 cordis 上下文。
+ * @param ctx - 主机侧 cordis 上下文（settings 服务已就绪）。
  */
 export function apply(ctx: Context): void {
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.register(
-      settingsNamespace(SCROLL_FLOW_SETTINGS_NAMESPACE),
-      ScrollFlowSettingsSchema,
-    )
-  })
+  ctx.settings.register(
+    settingsNamespace(SCROLL_FLOW_SETTINGS_NAMESPACE),
+    ScrollFlowSettingsSchema,
+  )
 }
