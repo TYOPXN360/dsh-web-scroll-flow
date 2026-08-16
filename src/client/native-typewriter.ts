@@ -1,20 +1,20 @@
 /**
- * TypewriterController — 为正在流式的助手消息（思维链 + 正文 Markdown）
- * 做逐字打字机动画。
+ * NativeTypewriterController（原生模式）— 直接在原始 Markdown 文本节点上做
+ * 逐字打字机，不再叠加覆盖层。
  *
- * 实现边界：不改 DSH 的 React 渲染，只操作 DOM。
- * - MutationObserver 监听内容列文本增长；只有文本实际变化才启动对应
- *   Markdown 的打字机（历史 / 静态消息不会误打字；overlay 自身 mutation
- *   不触发重启）。
- * - 打字期间把目标 Markdown 设为 display:none（不占高度、不预留整段
- *   空白），用一个作为正常流元素的纯文本覆盖层占据已打文本的真实高度，
- *   逐字吐出 + 末尾闪烁光标；因此消息高度随打字增长，无"长白条"。
- * - 覆盖层继承目标 markdown 的字体 / 行高 / 颜色，位置一致。
- * - 文本总量大时按公式线性提速，确保非常大段也尽快打完。
- * - 文本停止增长超过阈值视为流式结束：恢复原始 Markdown，短暂保留光标。
+ * 原理：DSH 流式时 React 会把 Markdown 的完整文本渲染进 DOM；本控制器
+ * 用 MutationObserver 捕获这次写入，立即把原始文本节点截断为"已打字前缀"
+ * （未显示的字符清空），浏览器实际绘制的是前缀 + 闪烁光标。下一次流式
+ * chunk 到达时再重复"React 写全量 → 我们截前缀"的循环。打字结束后恢复
+ * 完整文本并移除光标。
+ *
+ * 好处：
+ * - 没有覆盖层、没有双份 DOM、没有位置 / 行距 / 光标锚定问题。
+ * - 段落结构就是原始 Markdown 结构，段落间距天然一致。
+ * - 打字中原始元素高度 = 已显示前缀高度，不预留整段空白。
  */
 
-/** 覆盖层用 class 标记，便于测试与清理。 */
+/** 兼容旧名：光标与样式标记仍使用该 class 前缀。 */
 export const TYPEWRITER_OVERLAY_CLASS = 'dsh-scroll-flow-typewriter-overlay'
 
 export interface TypewriterOptions {
@@ -43,6 +43,8 @@ const DEFAULT_OPTIONS: TypewriterOptions = {
   loadGrace: 1200,
 }
 
+const CURSOR_CLASS = `${TYPEWRITER_OVERLAY_CLASS}-cursor`
+
 const CURSOR_STYLE: Partial<CSSStyleDeclaration> = {
   display: 'inline-block',
   width: '2px',
@@ -60,33 +62,29 @@ const BLINK_KEYFRAMES = `
 }
 `
 
-/** 覆盖层继承的文本排版样式，保证与最终 Markdown 的文字位置一致。 */
-const INHERITED_TEXT_STYLES: readonly (keyof CSSStyleDeclaration)[] = [
-  'fontFamily',
-  'fontSize',
-  'fontWeight',
-  'fontStyle',
-  'lineHeight',
-  'letterSpacing',
-  'wordSpacing',
-  'whiteSpace',
-]
-
 /** 消息 Markdown 容器选择器：Markdown 渲染根（hash class 前缀不固定，按特征匹配）。 */
 const MARKDOWN_SELECTOR = '[class*="_markdown_"], [data-dsh-markdown], .markdown'
 
-/** 一个流式目标的打字机状态。 */
+/** 文档序收集一个容器内的所有文本节点（含空节点，保持与目标文本切片对齐）。 */
+function collectTextNodes(root: Node): Text[] {
+  const nodes: Text[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node !== null) {
+    nodes.push(node as Text)
+    node = walker.nextNode()
+  }
+  return nodes
+}
+
+/** 一个流式目标的原生打字机状态。 */
 interface TypewriterSession {
   markdown: HTMLElement
   /** session 所属消息容器（flow 直接子容器）；节点被替换后仍可定位迁移。 */
   messageContainer: Element | null
-  shell: HTMLElement | null
-  overlay: HTMLDivElement | null
-  /** 已复用的段落 div 缓存：打字中只更新文本，不重建 DOM（手机端性能）。 */
-  paragraphEls: HTMLDivElement[]
   targetText: string
-  /** 段落底部间距（px），复制自目标 markdown 的 p，打字与完成一致。 */
-  paragraphGap: number
+  /** 当前 Markdown 结构下各文本节点的原始长度（React 全量写入时缓存）。 */
+  textLengths: number[]
   shownChars: number
   lastGrowthAt: number
   lastEmitAt: number
@@ -95,19 +93,18 @@ interface TypewriterSession {
 }
 
 /**
- * 一个内容列的打字机控制器。构造后 {@link attach} 生效，{@link dispose}
- * 完整清理。
+ * 一个内容列的原生打字机控制器。构造后 {@link attach} 生效，
+ * {@link dispose} 完整清理。
  */
-export class TypewriterController {
+export class NativeTypewriterController {
   private readonly flow: HTMLElement
   private readonly options: TypewriterOptions
 
-  /** 段落间保留的底部间距（px），复制自目标 markdown 的 p margin，打字与完成一致。 */
   private observer: MutationObserver | null = null
   private readonly sessions = new Map<HTMLElement, TypewriterSession>()
   /** attach 时已存在的 Markdown（历史消息），宽限期只保护这些。 */
   private readonly baselineMarkdowns = new Set<HTMLElement>()
-  /** 每个 Markdown 的最后可见文本：区分"流式增长"与"我们自己的 overlay mutation"。 */
+  /** 每个 Markdown 当前可见文本：区分"React 全量写入"与"我们自己的截断"。 */
   private readonly lastSeenByMarkdown = new Map<HTMLElement, string>()
   private readonly loadedAt = performance.now()
   private disposed = false
@@ -137,7 +134,7 @@ export class TypewriterController {
   }
 
   attach(): this {
-    if (this.disposed) throw new Error('TypewriterController: 已销毁的控制器不能重新挂载')
+    if (this.disposed) throw new Error('NativeTypewriterController: 已销毁的控制器不能重新挂载')
     this.ensureStyleTag()
     for (const markdown of this.markdowns()) {
       this.baselineMarkdowns.add(markdown)
@@ -184,18 +181,21 @@ export class TypewriterController {
       const growth = lastSeen !== undefined
         && text.length > lastSeen.length
         && text.startsWith(lastSeen)
-      this.lastSeenByMarkdown.set(markdown, text)
-      if (text.length === 0) continue
       const existing = this.sessions.get(markdown)
       if (existing !== undefined) {
+        // React 全量写入 → 记录新目标、重新缓存节点长度，并立即截回前缀。
         existing.targetText = text
+        existing.textLengths = collectTextNodes(markdown).map(node => node.data?.length ?? 0)
         existing.lastGrowthAt = performance.now()
         if (existing.shownChars >= existing.targetText.length) {
           existing.shownChars = Math.max(0, existing.targetText.length - 1)
         }
+        this.applyPrefix(existing)
         this.ensureStreaming(existing)
         continue
       }
+      this.lastSeenByMarkdown.set(markdown, text)
+      if (text.length === 0) continue
       // 没有运行状态时，任何文本变化都视为历史加载，不启动。
       if (!running) continue
       // 宽限期内的变化都视为历史加载，不启动。
@@ -242,24 +242,15 @@ export class TypewriterController {
   }
 
   private migrateSession(session: TypewriterSession, next: HTMLElement, text: string): void {
-    const oldMarkdown = session.markdown
-    const oldShell = session.shell
-    const newShell = next.parentElement
-    if (oldMarkdown.style.display === 'none') oldMarkdown.style.display = ''
-    if (session.overlay !== null && newShell !== null && oldShell !== newShell) {
-      oldShell?.removeChild(session.overlay)
-      newShell.insertBefore(session.overlay, next)
-    }
-    this.sessions.delete(oldMarkdown)
+    this.sessions.delete(session.markdown)
     session.markdown = next
     session.messageContainer = this.messageContainerOf(next)
-    session.shell = newShell
     session.targetText = text
+    session.textLengths = collectTextNodes(next).map(node => node.data?.length ?? 0)
     session.lastGrowthAt = performance.now()
     if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
-    next.style.display = 'none'
     this.sessions.set(next, session)
-    this.renderOverlay(session)
+    this.applyPrefix(session)
     this.ensureStreaming(session)
   }
 
@@ -267,11 +258,8 @@ export class TypewriterController {
     const session: TypewriterSession = {
       markdown,
       messageContainer: this.messageContainerOf(markdown),
-      shell: markdown.parentElement,
-      overlay: null,
-      paragraphEls: [],
-      paragraphGap: 0,
       targetText: text,
+      textLengths: collectTextNodes(markdown).map(node => node.data?.length ?? 0),
       shownChars: 0,
       lastGrowthAt: performance.now(),
       lastEmitAt: 0,
@@ -279,7 +267,7 @@ export class TypewriterController {
       holdTimer: undefined,
     }
     this.sessions.set(markdown, session)
-    this.installOverlay(session)
+    this.applyPrefix(session)
     this.ensureStreaming(session)
   }
 
@@ -300,13 +288,12 @@ export class TypewriterController {
   }
 
   private emitStep(session: TypewriterSession, now: number): void {
-    if (session.overlay === null) return
     const delta = session.lastEmitAt === 0 ? 16 : Math.max(0, now - session.lastEmitAt)
     session.lastEmitAt = now
     const speed = this.effectiveSpeed(session.targetText.length)
     const charsToAdd = Math.max(1, Math.floor(delta * speed))
     session.shownChars = Math.min(session.targetText.length, session.shownChars + charsToAdd)
-    this.renderOverlay(session)
+    this.applyPrefix(session)
     if (session.shownChars >= session.targetText.length
       && now - session.lastGrowthAt >= this.options.settleDelay) {
       this.settle(session)
@@ -324,101 +311,51 @@ export class TypewriterController {
   }
 
   /**
-   * 覆盖层作为正常流元素占据已打文本高度：目标 markdown 打字期间
-   * display:none（不占高、不预留整段空白），覆盖层继承其字体输入逐字。
+   * 原生截断：把原始 Markdown 的文本节点内容按 shownChars 前缀重建，
+   * 未显示的字符清空；光标插到最后一个文本节点之后。React 下一次全量
+   * 写入会被 onFlowChanged 捕获并再次截回。
    */
-  private installOverlay(session: TypewriterSession): void {
+  private applyPrefix(session: TypewriterSession): void {
     const markdown = session.markdown
-    const shell = session.shell
-    if (shell === null) return
-    const overlay = document.createElement('div')
-    overlay.className = TYPEWRITER_OVERLAY_CLASS
-    overlay.style.cssText = Object.entries({
-      margin: '0',
-      padding: '0',
-      minHeight: '1em',
-      pointerEvents: 'none',
-      fontSize: 'inherit',
-      lineHeight: 'inherit',
-      color: 'inherit',
-      whiteSpace: 'pre-wrap',
-      overflowWrap: 'anywhere',
-      wordBreak: 'break-word',
-    }).map(([k, v]) => `${k}:${v}`).join(';')
-    const style = getComputedStyle(markdown)
-    for (const prop of INHERITED_TEXT_STYLES) {
-      const value = style[prop]
-      if (typeof value === 'string' && value !== '') {
-        overlay.style.setProperty(String(prop), value)
+    const target = session.targetText
+    const shown = session.shownChars
+    const lengths = session.textLengths
+    const nodes = collectTextNodes(markdown)
+    let offset = 0
+    let lastTextNode: Text | null = null
+    for (let i = 0; i < nodes.length && i < lengths.length; i++) {
+      const node = nodes[i]!
+      const length = lengths[i] ?? 0
+      if (offset >= shown || length === 0) {
+        node.data = ''
+      } else {
+        const take = Math.min(length, shown - offset)
+        node.data = target.slice(offset, offset + take)
+        lastTextNode = node
       }
+      offset += length
     }
-    // 段落间距：取目标 markdown 第一个段落的 margin-bottom，打字与完成一致。
-    const firstParagraph = markdown.querySelector('p, li, pre, blockquote')
-    if (firstParagraph !== null) {
-      session.paragraphGap = parseFloat(getComputedStyle(firstParagraph).marginBottom) || 0
-    }
-    // 覆盖层放在 markdown 之前，占据已打文本的高度。
-    shell.insertBefore(overlay, markdown)
-    session.overlay = overlay
-    markdown.style.display = 'none'
-    this.renderOverlay(session)
-  }
-
-  /**
-   * 按段落渲染：目标文本用空行（\n\n）分隔段落。复用已有段落 div，只
-   * 更新文本与段距；段落数变化时才增删节点，避免高频流式下每帧重建
-   * DOM（手机端卡顿 / 发热主因）。
-   */
-  private renderOverlay(session: TypewriterSession): void {
-    const overlay = session.overlay
-    if (overlay === null) return
-    const cursor = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
-      ?? this.createCursor()
-    if (cursor.parentElement !== null && cursor.parentElement !== overlay) {
-      // 光标先挪到 overlay 根，避免被段落增删时误移除。
-      overlay.appendChild(cursor)
-    }
-    const prefix = session.targetText.slice(0, session.shownChars)
-    const paragraphs = prefix.split('\n\n').filter(segment => segment !== '' || session.shownChars === 0)
-    const els = session.paragraphEls
-    // 复用 / 补齐段落节点。
-    paragraphs.forEach((paragraph, index) => {
-      if (paragraph === '') return
-      let p = els[index]
-      if (p === undefined || p.parentElement !== overlay) {
-        p = document.createElement('div')
-        els[index] = p
-        overlay.appendChild(p)
-      }
-      p.textContent = paragraph
-      p.style.margin = index < paragraphs.length - 1 ? `0 0 ${session.paragraphGap}px` : ''
-    })
-    // 移除多余段落。
-    for (let i = paragraphs.length; i < els.length; i++) {
-      const extra = els[i]
-      if (extra !== undefined) extra.remove()
-    }
-    els.length = paragraphs.length
-    // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，否则覆盖层根。
-    const lastParagraph = els.length > 0 ? els[els.length - 1] ?? null : null
-    const anchor = lastParagraph === null ? overlay : lastParagraph
-    if (cursor.parentElement !== anchor) anchor.appendChild(cursor)
-  }
-
-  private createCursor(): HTMLSpanElement {
+    // 光标插到最后一个有文本的节点之后（React 可能已移除旧光标，直接重建）。
+    markdown.querySelector(`.${CURSOR_CLASS}`)?.remove()
     const cursor = document.createElement('span')
-    cursor.className = `${TYPEWRITER_OVERLAY_CLASS}-cursor`
+    cursor.className = CURSOR_CLASS
     cursor.style.cssText = Object.entries(CURSOR_STYLE).map(([k, v]) => `${k}:${v}`).join(';')
-    return cursor
+    if (lastTextNode !== null) {
+      lastTextNode.parentElement?.insertBefore(cursor, lastTextNode.nextSibling)
+    } else {
+      markdown.appendChild(cursor)
+    }
+    // 我们自己的截断应成为"当前可见文本"，避免下一次 mutation 误判。
+    this.lastSeenByMarkdown.set(markdown, target.slice(0, shown))
   }
 
-  /** 流式稳定：结束打字，保留光标一小段时间后恢复原始 Markdown。 */
+  /** 流式稳定：结束打字，保留光标一小段时间后移除。 */
   private settle(session: TypewriterSession): void {
-    if (session.settleTimer === undefined && session.overlay === null) return
+    if (session.settleTimer === undefined) return
     clearTimeout(session.settleTimer)
     session.settleTimer = undefined
     if (session.shownChars < session.targetText.length) session.shownChars = session.targetText.length
-    this.renderOverlay(session)
+    this.applyPrefix(session)
     session.holdTimer = setTimeout(() => { this.teardownSession(session) }, this.options.cursorHold)
   }
 
@@ -427,14 +364,9 @@ export class TypewriterController {
     clearTimeout(session.holdTimer)
     session.settleTimer = undefined
     session.holdTimer = undefined
-    // 恢复原始 Markdown 前通知同一容器的 controller 抑制入场推升。
     this.options.onRestore?.()
-    if (session.markdown.style.display === 'none') session.markdown.style.display = ''
-    if (session.overlay !== null) {
-      session.overlay.remove()
-      session.overlay = null
-    }
-    session.paragraphEls = []
+    // 移除光标；文本已由 applyPrefix 写全（settle 时），或直接恢复完整文本。
+    session.markdown.querySelector(`.${CURSOR_CLASS}`)?.remove()
     this.sessions.delete(session.markdown)
   }
 

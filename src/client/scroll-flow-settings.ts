@@ -12,20 +12,26 @@ import type { FollowOptions } from './scroll-flow-controller.ts'
 /** 自动滚动动画档位：关闭、优雅（慢速上推）、适中（当前默认）。 */
 export type FollowMode = 'off' | 'gentle' | 'medium'
 
+/** 打字机实现模式：原生（直接截断原始 Markdown）或覆盖层（叠加模拟层）。 */
+export type TypewriterMode = 'native' | 'overlay'
+
 export interface ScrollFlowSettings {
   followMode: FollowMode
   bounceEnabled: boolean
   typewriterEnabled: boolean
+  typewriterMode: TypewriterMode
 }
 
 export const SCROLL_FLOW_SETTINGS_NAMESPACE = 'dsh-web-scroll-flow'
 export const FOLLOW_MODE_FIELD = 'followMode'
 export const BOUNCE_ENABLED_FIELD = 'bounceEnabled'
 export const TYPEWRITER_ENABLED_FIELD = 'typewriterEnabled'
+export const TYPEWRITER_MODE_FIELD = 'typewriterMode'
 
 export const DEFAULT_FOLLOW_MODE: FollowMode = 'medium'
 export const DEFAULT_BOUNCE_ENABLED = true
 export const DEFAULT_TYPEWRITER_ENABLED = true
+export const DEFAULT_TYPEWRITER_MODE: TypewriterMode = 'native'
 
 /** localStorage 持久化键（单一 JSON 对象）。 */
 const STORAGE_KEY = 'dsh-web-scroll-flow.settings'
@@ -58,7 +64,8 @@ function readLocalSettings(): ScrollFlowSettings | undefined {
     const section = value as Partial<ScrollFlowSettings>
     if (!isFollowMode(section.followMode)
       || typeof section.bounceEnabled !== 'boolean'
-      || typeof section.typewriterEnabled !== 'boolean') {
+      || typeof section.typewriterEnabled !== 'boolean'
+      || (section.typewriterMode !== 'native' && section.typewriterMode !== 'overlay')) {
       return undefined
     }
     return section as ScrollFlowSettings
@@ -83,6 +90,7 @@ export class ScrollFlowPolicy {
   readonly followMode: SnapshotStore<FollowMode> = createSnapshotStore(DEFAULT_FOLLOW_MODE)
   readonly bounceEnabled: SnapshotStore<boolean> = createSnapshotStore(DEFAULT_BOUNCE_ENABLED)
   readonly typewriterEnabled: SnapshotStore<boolean> = createSnapshotStore(DEFAULT_TYPEWRITER_ENABLED)
+  readonly typewriterMode: SnapshotStore<TypewriterMode> = createSnapshotStore(DEFAULT_TYPEWRITER_MODE)
   private readonly host: SettingsScope<ScrollFlowSettings> | undefined
 
   /**
@@ -95,6 +103,7 @@ export class ScrollFlowPolicy {
       this.followMode.set(local.followMode)
       this.bounceEnabled.set(local.bounceEnabled)
       this.typewriterEnabled.set(local.typewriterEnabled)
+      this.typewriterMode.set(local.typewriterMode)
     }
     if (host !== undefined) {
       host.subscribe(() => { this.adopt(host) })
@@ -107,6 +116,7 @@ export class ScrollFlowPolicy {
       followMode: this.followMode.getSnapshot(),
       bounceEnabled: this.bounceEnabled.getSnapshot(),
       typewriterEnabled: this.typewriterEnabled.getSnapshot(),
+      typewriterMode: this.typewriterMode.getSnapshot(),
     })
   }
 
@@ -134,11 +144,22 @@ export class ScrollFlowPolicy {
     void this.host?.set(TYPEWRITER_ENABLED_FIELD, enabled)
   }
 
+  /** 切换打字机实现模式（原生截断 / 覆盖层模拟）。 */
+  setTypewriterMode(mode: TypewriterMode): void {
+    if (this.typewriterMode.getSnapshot() === mode) return
+    this.typewriterMode.set(mode)
+    this.persist()
+    void this.host?.set(TYPEWRITER_MODE_FIELD, mode)
+  }
+
   private adopt(host: SettingsScope<ScrollFlowSettings>): void {
     const section = host.getSnapshot().value
     if (section === undefined) return
     if (isFollowMode(section.followMode)) this.followMode.set(section.followMode)
     if (typeof section.bounceEnabled === 'boolean') this.bounceEnabled.set(section.bounceEnabled)
     if (typeof section.typewriterEnabled === 'boolean') this.typewriterEnabled.set(section.typewriterEnabled)
+    if (section.typewriterMode === 'native' || section.typewriterMode === 'overlay') {
+      this.typewriterMode.set(section.typewriterMode)
+    }
   }
 }

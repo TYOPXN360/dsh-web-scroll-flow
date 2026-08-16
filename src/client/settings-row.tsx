@@ -6,17 +6,19 @@
 import { createElement, type ChangeEvent, type ReactElement } from 'react'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { FollowMode } from './scroll-flow-settings.ts'
+import type { FollowMode, TypewriterMode } from './scroll-flow-settings.ts'
 
 export interface ScrollFlowSettingsRowInjected {
   hooks: {
     followMode: SnapshotStore<FollowMode>
     bounceEnabled: SnapshotStore<boolean>
     typewriterEnabled: SnapshotStore<boolean>
+    typewriterMode: SnapshotStore<TypewriterMode>
   }
   setFollowMode: (mode: FollowMode) => void
   setBounceEnabled: (enabled: boolean) => void
   setTypewriterEnabled: (enabled: boolean) => void
+  setTypewriterMode: (mode: TypewriterMode) => void
 }
 
 export type ScrollFlowSettingsRowProps =
@@ -62,14 +64,15 @@ const controlStyle: Record<string, string> = {
   padding: '4px 8px',
 }
 
-/** General 设置行：滚动动画档位 + 边缘回弹 + 打字机效果。 */
+/** General 设置行：滚动动画档位 + 边缘回弹 + 打字机效果与模式。 */
 export function ScrollFlowSettingsRow({
-  useFollowMode, useBounceEnabled, useTypewriterEnabled,
-  setFollowMode, setBounceEnabled, setTypewriterEnabled,
+  useFollowMode, useBounceEnabled, useTypewriterEnabled, useTypewriterMode,
+  setFollowMode, setBounceEnabled, setTypewriterEnabled, setTypewriterMode,
 }: ScrollFlowSettingsRowProps): ReactElement {
   const mode = useFollowMode(value => value)
   const bounceEnabled = useBounceEnabled(value => value)
   const typewriterEnabled = useTypewriterEnabled(value => value)
+  const typewriterMode = useTypewriterMode(value => value)
 
   const renderCheckbox = (
     label: string,
@@ -113,6 +116,24 @@ export function ScrollFlowSettingsRow({
         createElement('div', { style: descStyle }, '流式输出时以字为单位逐字显示，并带闪烁光标'),
       ),
       renderCheckbox('打字机效果', typewriterEnabled, setTypewriterEnabled),
+    ),
+    createElement('div', { style: rowStyle },
+      createElement('div', { style: textStyle },
+        createElement('div', { style: titleStyle }, '打字机模式'),
+        createElement('div', { style: descStyle }, '原生：直接截断原始 Markdown；覆盖层：叠加模拟层'),
+      ),
+      createElement('select', {
+        value: typewriterMode,
+        style: { ...controlStyle, opacity: typewriterEnabled ? 1 : 0.5 },
+        disabled: !typewriterEnabled,
+        onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+          setTypewriterMode(event.target.value as TypewriterMode)
+        },
+        'aria-label': '打字机模式',
+      },
+        createElement('option', { value: 'native' }, '原生'),
+        createElement('option', { value: 'overlay' }, '覆盖层'),
+      ),
     ),
   )
 }
