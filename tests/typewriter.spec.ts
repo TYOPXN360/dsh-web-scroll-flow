@@ -124,6 +124,42 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
+  it('打字中按段落渲染并保留段落间距（打完不出现空白跳变）', async () => {
+    const { flow, markdowns, shells } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const shell = shells[0]!
+    // 目标 markdown 含两段，段落间空行分隔，且首段带 margin 值。
+    const p1 = document.createElement('p')
+    p1.style.margin = '0 0 20px'
+    p1.textContent = '第一段内容'
+    const p2 = document.createElement('p')
+    p2.textContent = '第二段内容'
+    markdown.append(p1, document.createTextNode('\n\n'), p2)
+
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 500,
+      cursorHold: 30,
+    }).attach()
+    // 触发增长：段落结构已存在，改变首段文本触发流式。
+    await growText(p1, '第一段内容（追加）')
+
+    const overlay = shell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)!
+    // 多次 tick 让 shown 打满两段，再查段落 div 与段距。
+    for (let i = 0; i < 20; i++) {
+      clock += 20
+      typewriter.tick(clock)
+    }
+    const divs = Array.from(overlay.children).filter((c) => c.tagName === 'DIV')
+    // 至少第一段已渲染；首个 div 以第一段内容开头（第二段在 \n\n 之后）。
+    expect(divs.length).toBeGreaterThanOrEqual(1)
+    const firstDiv = divs[0] as HTMLDivElement
+    expect(firstDiv.textContent ?? '').toContain('第一段内容')
+    expect(firstDiv.style.margin).toContain('20px') // 段落间距复制自 p1
+    typewriter.dispose()
+  })
+
   it('多个 Markdown 目标（思维链 + 正文）可同时打字', async () => {
     const { flow, markdowns, shells } = makeMarkdownFlow(['', ''])
     const think = markdowns[0]!

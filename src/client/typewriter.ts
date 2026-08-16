@@ -18,7 +18,7 @@
 export const TYPEWRITER_OVERLAY_CLASS = 'dsh-scroll-flow-typewriter-overlay'
 
 export interface TypewriterOptions {
-  /** 基础吐字速度（字/ms）。默认 0.035（约 28 字/秒）。 */
+  /** 基础吐字速度（字/ms）。默认 0.06（约 60 字/秒）。 */
   baseSpeed: number
   /** 停止增长多久（ms）后视为流式结束。默认 500。 */
   settleDelay: number
@@ -32,7 +32,7 @@ export interface TypewriterOptions {
 }
 
 const DEFAULT_OPTIONS: TypewriterOptions = {
-  baseSpeed: 0.035,
+  baseSpeed: 0.06,
   settleDelay: 500,
   cursorHold: 900,
   loadGrace: 1200,
@@ -76,6 +76,8 @@ interface TypewriterSession {
   shell: HTMLElement | null
   overlay: HTMLDivElement | null
   targetText: string
+  /** 段落底部间距（px），复制自目标 markdown 的 p，打字与完成一致。 */
+  paragraphGap: number
   shownChars: number
   lastGrowthAt: number
   lastEmitAt: number
@@ -91,6 +93,7 @@ export class TypewriterController {
   private readonly flow: HTMLElement
   private readonly options: TypewriterOptions
 
+  /** 段落间保留的底部间距（px），复制自目标 markdown 的 p margin，打字与完成一致。 */
   private observer: MutationObserver | null = null
   private readonly sessions = new Map<HTMLElement, TypewriterSession>()
   /** 每个 Markdown 的最后可见文本：区分"流式增长"与"我们自己的 overlay mutation"。 */
@@ -185,6 +188,7 @@ export class TypewriterController {
       markdown,
       shell: markdown.parentElement,
       overlay: null,
+      paragraphGap: 0,
       targetText: text,
       shownChars: 0,
       lastGrowthAt: performance.now(),
@@ -252,6 +256,9 @@ export class TypewriterController {
       padding: '0',
       minHeight: '1em',
       pointerEvents: 'none',
+      fontSize: 'inherit',
+      lineHeight: 'inherit',
+      color: 'inherit',
       whiteSpace: 'pre-wrap',
       overflowWrap: 'anywhere',
       wordBreak: 'break-word',
@@ -263,6 +270,11 @@ export class TypewriterController {
         overlay.style.setProperty(String(prop), value)
       }
     }
+    // 段落间距：取目标 markdown 第一个段落的 margin-bottom，打字与完成一致。
+    const firstParagraph = markdown.querySelector('p, li, pre, blockquote')
+    if (firstParagraph !== null) {
+      session.paragraphGap = parseFloat(getComputedStyle(firstParagraph).marginBottom) || 0
+    }
     // 覆盖层放在 markdown 之前，占据已打文本的高度。
     shell.insertBefore(overlay, markdown)
     session.overlay = overlay
@@ -270,16 +282,40 @@ export class TypewriterController {
     this.renderOverlay(session)
   }
 
+  /**
+   * 按段落渲染：目标文本用空行（\n\n）分隔段落，覆盖层为每个已进行的段落
+   * 生成一个带相同 margin 的 div。打字中段尾就有与完成一致的间距，未进行
+   * 的段不占位置（不预留空白），光标排在已打文本末尾。
+   */
   private renderOverlay(session: TypewriterSession): void {
     const overlay = session.overlay
     if (overlay === null) return
-    overlay.textContent = session.targetText.slice(0, session.shownChars)
+    // 仅重建段落文本，保留段落 div（避免光标/焦点抖动）；先清掉旧段落。
+    for (const child of Array.from(overlay.children)) child.remove()
+    const prefix = session.targetText.slice(0, session.shownChars)
+    const paragraphs = prefix.split('\n\n').filter(segment => segment !== '' || session.shownChars === 0)
+    let lastParagraph: HTMLDivElement | null = null
+    paragraphs.forEach((paragraph, index) => {
+      if (paragraph === '') return
+      const p = document.createElement('div')
+      p.textContent = paragraph
+      if (index < paragraphs.length - 1) {
+        p.style.margin = `0 0 ${session.paragraphGap}px`
+      }
+      overlay.appendChild(p)
+      lastParagraph = p
+    })
+    // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，而非覆盖层末尾。
+    this.attachCursor(lastParagraph === null ? overlay : lastParagraph, overlay)
+  }
+
+  private attachCursor(anchor: HTMLElement, overlay: HTMLElement): void {
     const existing = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
     existing?.remove()
     const cursor = document.createElement('span')
     cursor.className = `${TYPEWRITER_OVERLAY_CLASS}-cursor`
     cursor.style.cssText = Object.entries(CURSOR_STYLE).map(([k, v]) => `${k}:${v}`).join(';')
-    overlay.appendChild(cursor)
+    anchor.appendChild(cursor)
   }
 
   /** 流式稳定：结束打字，保留光标一小段时间后恢复原始 Markdown。 */
