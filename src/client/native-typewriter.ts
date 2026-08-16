@@ -140,7 +140,9 @@ export class NativeTypewriterController {
       this.baselineMarkdowns.add(markdown)
       this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
     }
-    this.observer = new MutationObserver(() => { this.onFlowChanged() })
+    // rAF 防抖：React 流式提交会拆成多帧，等一帧结束后再统一处理，
+    // 避免把中间态文本当成完整目标（原生截断模式下会丢字）。
+    this.observer = new MutationObserver(() => { this.scheduleFlush() })
     this.observer.observe(this.flow, { childList: true, subtree: true, characterData: true })
     return this
   }
@@ -163,6 +165,36 @@ export class NativeTypewriterController {
     return Array.from(this.flow.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
   }
 
+  private flushScheduled = false
+  /** Mutation 回调时立即拍的快照：此时 React 刚写入完整文本，节点长度可信。 */
+  private readonly pendingLengths = new Map<HTMLElement, number[]>()
+  private readonly pendingText = new Map<HTMLElement, string>()
+
+  /**
+   * 合并同一帧内的多次 mutation，用微任务统一处理：React commit 在同步
+   * 微任务链里完成，queueMicrotask 会在打字 interval（宏任务）之前截断，
+   * 避免 interval 把 React 完整写入覆盖成已显示前缀，导致丢字。
+   */
+  private scheduleFlush(): void {
+    if (this.disposed) return
+    for (const markdown of this.markdowns()) {
+      const text = markdown.textContent ?? ''
+      // 只记录"React 新写入"（与当前可见前缀不同）；我们自己的截断
+      // mutation 不覆盖快照，避免 interval 推进时把完整目标覆盖掉。
+      if (text === this.lastSeenByMarkdown.get(markdown)) continue
+      this.pendingLengths.set(markdown, collectTextNodes(markdown).map(node => node.data?.length ?? 0))
+      this.pendingText.set(markdown, text)
+    }
+    if (this.flushScheduled) return
+    this.flushScheduled = true
+    queueMicrotask(() => {
+      this.flushScheduled = false
+      if (!this.disposed) this.onFlowChanged()
+      this.pendingLengths.clear()
+      this.pendingText.clear()
+    })
+  }
+
   private onFlowChanged(): void {
     if (this.disposed) return
     const markdowns = this.markdowns()
@@ -183,13 +215,24 @@ export class NativeTypewriterController {
         && text.startsWith(lastSeen)
       const existing = this.sessions.get(markdown)
       if (existing !== undefined) {
-        // React 全量写入 → 记录新目标、重新缓存节点长度，并立即截回前缀。
-        existing.targetText = text
-        existing.textLengths = collectTextNodes(markdown).map(node => node.data?.length ?? 0)
-        existing.lastGrowthAt = performance.now()
-        if (existing.shownChars >= existing.targetText.length) {
-          existing.shownChars = Math.max(0, existing.targetText.length - 1)
+        // 用 mutation 时刻的快照（React 全量写入）而非当前 DOM（可能已被
+        // 截断），避免节点长度对不上导致丢字。
+        const snapshotText = this.pendingText.get(markdown) ?? text
+        const snapshotLengths = this.pendingLengths.get(markdown)
+          ?? collectTextNodes(markdown).map(node => node.data?.length ?? 0)
+        // 只把"前缀扩展"当成新的完整目标；中间态（React 分批提交）不
+        // 污染 targetText，只同步节点长度并截回当前目标。
+        const extension = snapshotText.length > existing.targetText.length
+          && snapshotText.startsWith(existing.targetText)
+        console.log('DEBUG existing', JSON.stringify(snapshotText), 'target', JSON.stringify(existing.targetText), 'ext', extension, 'len', snapshotLengths)
+        if (extension) {
+          existing.targetText = snapshotText
+          existing.lastGrowthAt = performance.now()
+          if (existing.shownChars >= existing.targetText.length) {
+            existing.shownChars = Math.max(0, existing.targetText.length - 1)
+          }
         }
+        existing.textLengths = snapshotLengths
         this.applyPrefix(existing)
         this.ensureStreaming(existing)
         continue
@@ -321,6 +364,12 @@ export class NativeTypewriterController {
     const shown = session.shownChars
     const lengths = session.textLengths
     const nodes = collectTextNodes(markdown)
+    // 结构变化未稳定（React 分批提交中）：跳过本次截断，避免丢字；
+    // 下一帧 flush 会按新结构重新同步。
+    if (nodes.length !== lengths.length) {
+      this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
+      return
+    }
     let offset = 0
     let lastTextNode: Text | null = null
     for (let i = 0; i < nodes.length && i < lengths.length; i++) {
