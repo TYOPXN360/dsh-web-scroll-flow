@@ -82,6 +82,8 @@ interface TypewriterSession {
   messageContainer: Element | null
   shell: HTMLElement | null
   overlay: HTMLDivElement | null
+  /** 已复用的段落 div 缓存：打字中只更新文本，不重建 DOM（手机端性能）。 */
+  paragraphEls: HTMLDivElement[]
   targetText: string
   /** 段落底部间距（px），复制自目标 markdown 的 p，打字与完成一致。 */
   paragraphGap: number
@@ -257,6 +259,7 @@ export class TypewriterController {
       messageContainer: this.messageContainerOf(markdown),
       shell: markdown.parentElement,
       overlay: null,
+      paragraphEls: [],
       paragraphGap: 0,
       targetText: text,
       shownChars: 0,
@@ -352,35 +355,42 @@ export class TypewriterController {
   }
 
   /**
-   * 按段落渲染：目标文本用空行（\n\n）分隔段落，覆盖层为每个已进行的段落
-   * 生成一个带相同 margin 的 div。打字中段尾就有与完成一致的间距，未进行
-   * 的段不占位置（不预留空白），光标排在已打文本末尾。
+   * 按段落渲染：目标文本用空行（\n\n）分隔段落。复用已有段落 div，只
+   * 更新文本与段距；段落数变化时才增删节点，避免高频流式下每帧重建
+   * DOM（手机端卡顿 / 发热主因）。
    */
   private renderOverlay(session: TypewriterSession): void {
     const overlay = session.overlay
     if (overlay === null) return
-    // 光标节点复用：先取出现有光标，清段落时保留它，避免高频流式下
-    // 光标反复移除/重建导致思维链里看不到光标。
     const cursor = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
       ?? this.createCursor()
-    for (const child of Array.from(overlay.children)) {
-      if (child === cursor) continue
-      child.remove()
+    if (cursor.parentElement !== null && cursor.parentElement !== overlay) {
+      // 光标先挪到 overlay 根，避免被段落增删时误移除。
+      overlay.appendChild(cursor)
     }
     const prefix = session.targetText.slice(0, session.shownChars)
     const paragraphs = prefix.split('\n\n').filter(segment => segment !== '' || session.shownChars === 0)
-    let lastParagraph: HTMLDivElement | null = null
+    const els = session.paragraphEls
+    // 复用 / 补齐段落节点。
     paragraphs.forEach((paragraph, index) => {
       if (paragraph === '') return
-      const p = document.createElement('div')
-      p.textContent = paragraph
-      if (index < paragraphs.length - 1) {
-        p.style.margin = `0 0 ${session.paragraphGap}px`
+      let p = els[index]
+      if (p === undefined || p.parentElement !== overlay) {
+        p = document.createElement('div')
+        els[index] = p
+        overlay.appendChild(p)
       }
-      overlay.appendChild(p)
-      lastParagraph = p
+      p.textContent = paragraph
+      p.style.margin = index < paragraphs.length - 1 ? `0 0 ${session.paragraphGap}px` : ''
     })
+    // 移除多余段落。
+    for (let i = paragraphs.length; i < els.length; i++) {
+      const extra = els[i]
+      if (extra !== undefined) extra.remove()
+    }
+    els.length = paragraphs.length
     // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，否则覆盖层根。
+    const lastParagraph = els.length > 0 ? els[els.length - 1] ?? null : null
     const anchor = lastParagraph === null ? overlay : lastParagraph
     if (cursor.parentElement !== anchor) anchor.appendChild(cursor)
   }
@@ -414,6 +424,7 @@ export class TypewriterController {
       session.overlay.remove()
       session.overlay = null
     }
+    session.paragraphEls = []
     this.sessions.delete(session.markdown)
   }
 

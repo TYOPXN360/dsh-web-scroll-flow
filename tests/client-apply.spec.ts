@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { apply, installScrollFlow, SCROLLPORT_SELECTOR, type ScrollFlowInstall } from '../src/client/index.ts'
+import {
+  apply, installScrollFlow, SCROLLPORT_SELECTOR,
+  type ScrollFlowInstall,
+} from '../src/client/index.ts'
 
 /** runtime/client 的 lib 是 __ModuleLoader__ bundle，Node 测试用轻量 store 替代。 */
 vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
