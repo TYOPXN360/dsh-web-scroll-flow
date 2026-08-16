@@ -1,11 +1,14 @@
 /**
- * TypewriterController — 为正在流式的助手消息做逐字打字机动画。
+ * TypewriterController — 为正在流式的助手消息（思维链 + 正文 Markdown）
+ * 做逐字打字机动画。
  *
  * 实现边界：不改 DSH 的 React 渲染，只操作 DOM。
- * - MutationObserver 监听内容列文本增长，识别"正在流式"的最后一条
- *   Markdown 消息。
- * - 流式期间把消息的 Markdown 容器设为 visibility:hidden（保留布局），
- *   在上方叠加一个同尺寸覆盖层，按字符匀速吐出纯文本，末尾带闪烁光标。
+ * - MutationObserver 监听内容列文本增长；只有文本实际变化才启动对应
+ *   Markdown 的打字机（历史消息静止，不会误打字；overlay 自身 mutation
+ *   不会重启）。
+ * - 每个流式目标一个覆盖层：目标 Markdown 设为 visibility:hidden（保留
+ *   布局），覆盖层精确对齐其内容盒并继承排版样式，按字符匀速吐出纯文本，
+ *   末尾带闪烁光标；因此打字中与打完字后文字位置一致。
  * - 文本总量大时自动提高吐字速度，保证"字多也平滑"。
  * - 文本停止增长超过阈值视为流式结束，短暂保留光标后恢复原始 Markdown。
  */
@@ -30,7 +33,6 @@ const DEFAULT_OPTIONS: TypewriterOptions = {
 
 const OVERLAY_STYLE: Partial<CSSStyleDeclaration> = {
   position: 'absolute',
-  inset: '0',
   margin: '0',
   padding: '0',
   pointerEvents: 'none',
@@ -38,6 +40,23 @@ const OVERLAY_STYLE: Partial<CSSStyleDeclaration> = {
   overflowWrap: 'anywhere',
   wordBreak: 'break-word',
 }
+
+/** 覆盖层需继承的文本排版样式，保证打完字恢复 Markdown 时位置一致。 */
+const INHERITED_TEXT_STYLES: readonly (keyof CSSStyleDeclaration)[] = [
+  'font',
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'lineHeight',
+  'letterSpacing',
+  'wordSpacing',
+  'textIndent',
+  'textAlign',
+  'textTransform',
+  'direction',
+  'color',
+]
 
 const CURSOR_STYLE: Partial<CSSStyleDeclaration> = {
   display: 'inline-block',
@@ -59,6 +78,19 @@ const BLINK_KEYFRAMES = `
 /** 消息 Markdown 容器选择器：Markdown 渲染根（hash class 前缀不固定，按特征匹配）。 */
 const MARKDOWN_SELECTOR = '[class*="_markdown_"], [data-dsh-markdown], .markdown'
 
+/** 一个流式目标的打字机状态。 */
+interface TypewriterSession {
+  markdown: HTMLElement
+  shell: HTMLElement | null
+  overlay: HTMLDivElement | null
+  targetText: string
+  shownChars: number
+  lastGrowthAt: number
+  lastEmitAt: number
+  settleTimer: ReturnType<typeof setTimeout> | undefined
+  holdTimer: ReturnType<typeof setTimeout> | undefined
+}
+
 /**
  * 一个内容列的打字机控制器。构造后 {@link attach} 生效，{@link dispose}
  * 完整清理。
@@ -68,48 +100,43 @@ export class TypewriterController {
   private readonly options: TypewriterOptions
 
   private observer: MutationObserver | null = null
-  private markdown: HTMLElement | null = null
-  private shell: HTMLElement | null = null
-  private overlay: HTMLDivElement | null = null
-  private targetText = ''
-  private lastSeenText = ''
-  private shownChars = 0
-  private lastGrowthAt = 0
-  private lastEmitAt = 0
-  private settleTimer: ReturnType<typeof setTimeout> | undefined
-  private holdTimer: ReturnType<typeof setTimeout> | undefined
+  private readonly sessions = new Map<HTMLElement, TypewriterSession>()
+  /** 每个 Markdown 的最后可见文本：区分"流式增长"与"我们自己的 overlay mutation"。 */
+  private readonly lastSeenByMarkdown = new Map<HTMLElement, string>()
   private disposed = false
-
-  /** 是否正在流式打字。 */
-  private streaming = false
 
   constructor(flow: HTMLElement, options: Partial<TypewriterOptions> = {}) {
     this.flow = flow
     this.options = { ...DEFAULT_OPTIONS, ...options }
   }
 
-  /** 当前已显示字符数（测试 / 调试读取）。 */
+  /** 当前所有活跃打字机已显示字符总数（测试 / 调试读取）。 */
   get shown(): number {
-    return this.shownChars
+    let total = 0
+    for (const session of this.sessions.values()) total += session.shownChars
+    return total
   }
 
-  /** 当前目标完整文本长度（测试 / 调试读取）。 */
+  /** 当前所有活跃打字机目标文本总长（测试 / 调试读取）。 */
   get targetLength(): number {
-    return this.targetText.length
+    let total = 0
+    for (const session of this.sessions.values()) total += session.targetText.length
+    return total
   }
 
   /** 是否处于流式打字状态。 */
   get active(): boolean {
-    return this.streaming
+    return this.sessions.size > 0
   }
 
   attach(): this {
     if (this.disposed) throw new Error('TypewriterController: 已销毁的控制器不能重新挂载')
     this.ensureStyleTag()
-    // 记录当前静止文本；流式由后续文本变化触发，避免 overlay 自身
-    // mutation 被误判为流式并反复重启。
-    const current = this.findStreamingMarkdown()
-    this.lastSeenText = current?.textContent ?? ''
+    // 记录当前静止文本；流式由后续文本变化触发，避免历史消息被误打字，
+    // 也避免 overlay 自身 mutation 被误判为流式并反复重启。
+    for (const markdown of this.markdowns()) {
+      this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
+    }
     this.observer = new MutationObserver(() => { this.onFlowChanged() })
     this.observer.observe(this.flow, { childList: true, subtree: true, characterData: true })
     return this
@@ -120,158 +147,164 @@ export class TypewriterController {
     this.disposed = true
     this.observer?.disconnect()
     this.observer = null
-    this.teardown()
+    for (const session of this.sessions.values()) this.teardownSession(session)
+    this.sessions.clear()
   }
 
-  /** 手动推进一次吐字（测试用；浏览器端由 interval 驱动）。 */
+  /** 手动推进所有打字机一帧（测试用；浏览器端由 interval 驱动）。 */
   tick(now = performance.now()): void {
-    this.emitStep(now)
+    for (const session of this.sessions.values()) this.emitStep(session, now)
+  }
+
+  private markdowns(): HTMLElement[] {
+    return Array.from(this.flow.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
   }
 
   private onFlowChanged(): void {
     if (this.disposed) return
-    const markdown = this.findStreamingMarkdown()
-    const text = markdown?.textContent ?? ''
-    // 文本没变：mutation 来自我们自己的 overlay / 其它非文本更新，不重启。
-    if (text === this.lastSeenText) return
-    this.lastSeenText = text
-    if (markdown === null) {
-      if (this.markdown !== null && !this.markdown.isConnected) this.teardown()
-      return
-    }
-    if (this.markdown !== markdown) {
-      this.teardown()
-      this.markdown = markdown
-      // overlay 与 Markdown 容器同层：放入 markdown 的直接父容器，绝对覆盖其文本区。
-      this.shell = markdown.parentElement
-      this.targetText = text
-      this.shownChars = 0
-      this.lastGrowthAt = performance.now()
-      this.lastEmitAt = 0
-      this.startStreaming()
-      return
-    }
-    if (text.length > this.targetText.length || text !== this.targetText) {
-      this.targetText = text
-      this.lastGrowthAt = performance.now()
-      if (this.shownChars >= this.targetText.length) {
-        // 目标已全部显示，但仍可能继续增长；保持流式直到稳定。
-        this.shownChars = Math.max(0, this.targetText.length - 1)
+    const markdowns = this.markdowns()
+    const live = new Set<HTMLElement>(markdowns)
+    for (const markdown of markdowns) {
+      const text = markdown.textContent ?? ''
+      const lastSeen = this.lastSeenByMarkdown.get(markdown)
+      if (text === lastSeen) continue
+      this.lastSeenByMarkdown.set(markdown, text)
+      if (text.length === 0) continue
+      const existing = this.sessions.get(markdown)
+      if (existing === undefined) {
+        this.startSession(markdown, text)
+      } else {
+        existing.targetText = text
+        existing.lastGrowthAt = performance.now()
+        if (existing.shownChars >= existing.targetText.length) {
+          existing.shownChars = Math.max(0, existing.targetText.length - 1)
+        }
+        this.ensureStreaming(existing)
       }
-      this.startStreaming()
+    }
+    for (const [markdown, session] of this.sessions) {
+      if (!markdown.isConnected || !live.has(markdown)) this.teardownSession(session)
     }
   }
 
-  /** 找到"正在增长"的助手 Markdown 容器：内容列中最后一个 Markdown 元素。 */
-  private findStreamingMarkdown(): HTMLElement | null {
-    const candidates = this.flow.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR)
-    if (candidates.length === 0) return null
-    return candidates[candidates.length - 1] ?? null
+  private startSession(markdown: HTMLElement, text: string): void {
+    const session: TypewriterSession = {
+      markdown,
+      shell: markdown.parentElement,
+      overlay: null,
+      targetText: text,
+      shownChars: 0,
+      lastGrowthAt: performance.now(),
+      lastEmitAt: 0,
+      settleTimer: undefined,
+      holdTimer: undefined,
+    }
+    this.sessions.set(markdown, session)
+    this.installOverlay(session)
+    this.ensureStreaming(session)
   }
 
-  private startStreaming(): void {
-    if (this.streaming) return
-    this.streaming = true
-    clearTimeout(this.settleTimer)
-    clearTimeout(this.holdTimer)
-    this.installOverlay()
-    // 吐字由 interval 驱动；高频 MutationObserver 只更新目标。
+  private ensureStreaming(session: TypewriterSession): void {
+    if (session.settleTimer !== undefined) return
     const interval = 16
-    let last = performance.now()
     const step = (): void => {
-      if (this.disposed || !this.streaming) return
-      const now = performance.now()
-      this.emitStep(now)
-      // 停止增长判定：连续 settleDelay 无变化则收尾。
-      if (this.shownChars >= this.targetText.length && now - this.lastGrowthAt >= this.options.settleDelay) {
-        this.settle()
+      if (this.disposed) return
+      this.emitStep(session, performance.now())
+      if (session.shownChars >= session.targetText.length
+        && performance.now() - session.lastGrowthAt >= this.options.settleDelay) {
+        this.settle(session)
         return
       }
-      last = now
-      this.settleTimer = setTimeout(step, interval)
+      session.settleTimer = setTimeout(step, interval)
     }
-    this.settleTimer = setTimeout(step, interval)
+    session.settleTimer = setTimeout(step, interval)
   }
 
-  private emitStep(now: number): void {
-    if (!this.streaming || this.markdown === null || this.overlay === null) return
-    const delta = this.lastEmitAt === 0 ? 16 : Math.max(0, now - this.lastEmitAt)
-    this.lastEmitAt = now
-    const speed = this.effectiveSpeed()
+  private emitStep(session: TypewriterSession, now: number): void {
+    if (session.overlay === null) return
+    const delta = session.lastEmitAt === 0 ? 16 : Math.max(0, now - session.lastEmitAt)
+    session.lastEmitAt = now
+    const speed = this.effectiveSpeed(session.targetText.length)
     const charsToAdd = Math.max(1, Math.floor(delta * speed))
-    this.shownChars = Math.min(this.targetText.length, this.shownChars + charsToAdd)
-    this.renderOverlay()
-    // 全部吐出且停止增长超过阈值：结束打字并进入光标保持。
-    if (this.shownChars >= this.targetText.length && now - this.lastGrowthAt >= this.options.settleDelay) {
-      this.settle()
+    session.shownChars = Math.min(session.targetText.length, session.shownChars + charsToAdd)
+    this.renderOverlay(session)
+    if (session.shownChars >= session.targetText.length
+      && now - session.lastGrowthAt >= this.options.settleDelay) {
+      this.settle(session)
     }
   }
 
   /** 字多时提速：总量 > 4000 字提到 2 倍，> 12000 提到 3 倍。 */
-  private effectiveSpeed(): number {
-    const length = Math.max(1, this.targetText.length)
+  private effectiveSpeed(length: number): number {
     if (length > 12_000) return this.options.baseSpeed * 3
     if (length > 4_000) return this.options.baseSpeed * 2
     return this.options.baseSpeed
   }
 
-  private installOverlay(): void {
-    const markdown = this.markdown
-    const shell = this.shell
-    if (markdown === null || shell === null) return
-    // 覆盖层放在消息外壳（有定位/背景的祖先）内，绝对覆盖 Markdown 区域。
+  /** 覆盖层与目标 Markdown 内容盒对齐，并继承文本排版样式。 */
+  private installOverlay(session: TypewriterSession): void {
+    const markdown = session.markdown
+    const shell = session.shell
+    if (shell === null) return
     const overlay = document.createElement('div')
     overlay.className = TYPEWRITER_OVERLAY_CLASS
     overlay.style.cssText = Object.entries(OVERLAY_STYLE).map(([k, v]) => `${k}:${v}`).join(';')
-    overlay.dataset.for = 'typewriter'
     shell.appendChild(overlay)
-    // 确保定位：shell 若 static 则转 relative。
     if (getComputedStyle(shell).position === 'static') shell.style.position = 'relative'
-    this.overlay = overlay
+    session.overlay = overlay
     markdown.style.visibility = 'hidden'
-    this.renderOverlay()
+
+    // 对齐：overlay 与 markdown 同在 shell 内，按 markdown 的 offset 定位。
+    overlay.style.left = `${markdown.offsetLeft}px`
+    overlay.style.top = `${markdown.offsetTop}px`
+    overlay.style.width = `${markdown.offsetWidth}px`
+    overlay.style.height = `${markdown.offsetHeight}px`
+    const style = getComputedStyle(markdown)
+    for (const prop of INHERITED_TEXT_STYLES) {
+      const value = style[prop]
+      if (typeof value === 'string' && value !== '') {
+        const cssProp = String(prop).replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)
+        overlay.style.setProperty(cssProp, value)
+      }
+    }
+    this.renderOverlay(session)
   }
 
-  private renderOverlay(): void {
-    const overlay = this.overlay
+  private renderOverlay(session: TypewriterSession): void {
+    const overlay = session.overlay
     if (overlay === null) return
-    overlay.textContent = this.targetText.slice(0, this.shownChars)
+    overlay.textContent = session.targetText.slice(0, session.shownChars)
     const cursor = document.createElement('span')
     cursor.style.cssText = Object.entries(CURSOR_STYLE).map(([k, v]) => `${k}:${v}`).join(';')
     overlay.appendChild(cursor)
   }
 
   /** 流式稳定：结束打字，保留光标一小段时间后恢复原始 Markdown。 */
-  private settle(): void {
-    if (!this.streaming) return
-    this.streaming = false
-    clearTimeout(this.settleTimer)
-    if (this.shownChars < this.targetText.length) this.shownChars = this.targetText.length
-    this.renderOverlay()
-    this.holdTimer = setTimeout(() => { this.teardown() }, this.options.cursorHold)
+  private settle(session: TypewriterSession): void {
+    if (session.settleTimer === undefined && session.overlay === null) return
+    clearTimeout(session.settleTimer)
+    session.settleTimer = undefined
+    if (session.shownChars < session.targetText.length) session.shownChars = session.targetText.length
+    this.renderOverlay(session)
+    session.holdTimer = setTimeout(() => { this.teardownSession(session) }, this.options.cursorHold)
   }
 
-  private teardown(): void {
-    this.streaming = false
-    clearTimeout(this.settleTimer)
-    clearTimeout(this.holdTimer)
-    if (this.markdown !== null) this.markdown.style.visibility = ''
-    if (this.shell !== null && this.overlay !== null) {
-      // 仅移除我们安装的 overlay，恢复 shell 定位（避免影响后续安装）。
-      const overlay = this.overlay
-      this.overlay = null
+  private teardownSession(session: TypewriterSession): void {
+    clearTimeout(session.settleTimer)
+    clearTimeout(session.holdTimer)
+    session.settleTimer = undefined
+    session.holdTimer = undefined
+    if (session.markdown.style.visibility === 'hidden') session.markdown.style.visibility = ''
+    if (session.shell !== null && session.overlay !== null) {
+      const overlay = session.overlay
+      session.overlay = null
       overlay.remove()
-      if (getComputedStyle(this.shell).position === 'relative'
-        && (this.shell.style.position === 'relative')) {
-        this.shell.style.position = ''
+      if (getComputedStyle(session.shell).position === 'relative'
+        && session.shell.style.position === 'relative') {
+        session.shell.style.position = ''
       }
     }
-    // 记录当前文本：移除 overlay 引发的 mutation 不应误判为新的流式。
-    this.lastSeenText = this.markdown?.textContent ?? this.lastSeenText
-    this.markdown = null
-    this.shell = null
-    this.targetText = ''
-    this.shownChars = 0
+    this.sessions.delete(session.markdown)
   }
 
   private ensureStyleTag(): void {
