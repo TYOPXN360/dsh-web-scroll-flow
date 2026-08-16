@@ -12,6 +12,12 @@ const CLIENT_EXTERNALS = [
   '@deepseek-ai/dsh-client-ui-slots',
 ]
 
+/** Node 半由 Host profile 提供的服务 / 库依赖，保持 external。 */
+const NODE_EXTERNALS = [
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/schemastery',
+]
+
 /**
  * Node half: a host-side no-op entry the Loader imports so the row qualifies
  * as a loader entry (the client-modules scan keys off Loader entries).
@@ -29,6 +35,9 @@ export default defineConfig([
     clean: false,
     sourcemap: true,
     dts: true,
+    deps: {
+      neverBundle: NODE_EXTERNALS,
+    },
   },
   {
     name: `${ID}/client`,

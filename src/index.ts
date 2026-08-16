@@ -1,13 +1,21 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import {
+  SCROLL_FLOW_SETTINGS_NAMESPACE, ScrollFlowSettingsSchema,
+} from './settings.ts'
 
 export const name = 'dsh-web-scroll-flow'
 
 /**
- * 节点半入口：插件的全部行为在浏览器半（/client）。节点半仅作为
- * loader 条目的合法入口存在，使 client-modules 的 dsh.client 扫描
- * 命中本包并服务其浏览器 bundle。
- * @param _ctx - 主机侧 cordis 上下文（本插件不使用）。
+ * 节点半入口：注册浏览器设置项的 Host section，使 General 设置行写入的
+ * 偏好持久化到用户设置文档。滚动动效本身在浏览器半（/client）。
+ * @param ctx - 主机侧 cordis 上下文。
  */
-export function apply(_ctx: Context): void {
-  // 无主机侧行为。
+export function apply(ctx: Context): void {
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.register(
+      settingsNamespace(SCROLL_FLOW_SETTINGS_NAMESPACE),
+      ScrollFlowSettingsSchema,
+    )
+  })
 }

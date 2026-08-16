@@ -78,6 +78,8 @@ const MARKDOWN_SELECTOR = '[class*="_markdown_"], [data-dsh-markdown], .markdown
 /** 一个流式目标的打字机状态。 */
 interface TypewriterSession {
   markdown: HTMLElement
+  /** session 所属消息容器（flow 直接子容器）；节点被替换后仍可定位迁移。 */
+  messageContainer: Element | null
   shell: HTMLElement | null
   overlay: HTMLDivElement | null
   targetText: string
@@ -101,6 +103,8 @@ export class TypewriterController {
   /** 段落间保留的底部间距（px），复制自目标 markdown 的 p margin，打字与完成一致。 */
   private observer: MutationObserver | null = null
   private readonly sessions = new Map<HTMLElement, TypewriterSession>()
+  /** attach 时已存在的 Markdown（历史消息），宽限期只保护这些。 */
+  private readonly baselineMarkdowns = new Set<HTMLElement>()
   /** 每个 Markdown 的最后可见文本：区分"流式增长"与"我们自己的 overlay mutation"。 */
   private readonly lastSeenByMarkdown = new Map<HTMLElement, string>()
   private readonly loadedAt = performance.now()
@@ -134,6 +138,7 @@ export class TypewriterController {
     if (this.disposed) throw new Error('TypewriterController: 已销毁的控制器不能重新挂载')
     this.ensureStyleTag()
     for (const markdown of this.markdowns()) {
+      this.baselineMarkdowns.add(markdown)
       this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
     }
     this.observer = new MutationObserver(() => { this.onFlowChanged() })
@@ -166,31 +171,84 @@ export class TypewriterController {
     const loading = performance.now() - this.loadedAt < this.options.loadGrace
     for (const markdown of markdowns) {
       const text = markdown.textContent ?? ''
+      const hadBaseline = this.baselineMarkdowns.has(markdown)
       const lastSeen = this.lastSeenByMarkdown.get(markdown)
       if (text === lastSeen) continue
+      // 只有"持续增长"（新文本是上次文本的前缀扩展）才像流式打字；
+      // 一次性渲染完整的历史消息不会启动。
+      const growth = lastSeen !== undefined
+        && text.length > lastSeen.length
+        && text.startsWith(lastSeen)
       this.lastSeenByMarkdown.set(markdown, text)
       if (text.length === 0) continue
       const existing = this.sessions.get(markdown)
-      if (existing === undefined) {
-        if (loading) continue
-        this.startSession(markdown, text)
-      } else {
+      if (existing !== undefined) {
         existing.targetText = text
         existing.lastGrowthAt = performance.now()
         if (existing.shownChars >= existing.targetText.length) {
           existing.shownChars = Math.max(0, existing.targetText.length - 1)
         }
         this.ensureStreaming(existing)
+        continue
       }
+      // attach 时已存在节点在宽限期内的渲染视为历史加载，不启动。
+      if (loading && hadBaseline) continue
+      // 同一消息容器内节点被替换（真实思维链流式）：优先迁移，防止旧
+      // session 在清理循环中被拆掉。
+      if (this.tryMigrateSession(markdown, text)) continue
+      if (!growth) continue
+      this.startSession(markdown, text)
     }
     for (const [markdown, session] of this.sessions) {
       if (!markdown.isConnected || !live.has(markdown)) this.teardownSession(session)
     }
   }
 
+  private messageContainerOf(el: HTMLElement): Element | null {
+    return el.closest('[data-chat-anchor-key]')
+      ?? Array.from(this.flow.children).find(child => child.contains(el))
+      ?? null
+  }
+
+  /** 同一消息内 markdown 节点被替换且文本延续时，迁移打字机 session。 */
+  private tryMigrateSession(next: HTMLElement, text: string): boolean {
+    const nextContainer = this.messageContainerOf(next)
+    for (const [oldMarkdown, session] of this.sessions) {
+      if (oldMarkdown === next) continue
+      if (session.messageContainer === null || session.messageContainer !== nextContainer) continue
+      if (!text.startsWith(session.targetText)) continue
+      this.migrateSession(session, next, text)
+      return true
+    }
+    return false
+  }
+
+  private migrateSession(session: TypewriterSession, next: HTMLElement, text: string): void {
+    const oldMarkdown = session.markdown
+    const oldShell = session.shell
+    const newShell = next.parentElement
+    if (oldMarkdown.style.display === 'none') oldMarkdown.style.display = ''
+    if (session.overlay !== null && newShell !== null && oldShell !== newShell) {
+      oldShell?.removeChild(session.overlay)
+      newShell.insertBefore(session.overlay, next)
+    }
+    this.sessions.delete(oldMarkdown)
+    session.markdown = next
+    session.messageContainer = this.messageContainerOf(next)
+    session.shell = newShell
+    session.targetText = text
+    session.lastGrowthAt = performance.now()
+    if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
+    next.style.display = 'none'
+    this.sessions.set(next, session)
+    this.renderOverlay(session)
+    this.ensureStreaming(session)
+  }
+
   private startSession(markdown: HTMLElement, text: string): void {
     const session: TypewriterSession = {
       markdown,
+      messageContainer: this.messageContainerOf(markdown),
       shell: markdown.parentElement,
       overlay: null,
       paragraphGap: 0,
