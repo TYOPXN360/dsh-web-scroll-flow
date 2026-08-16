@@ -182,17 +182,57 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(controller.following).toBe(false)
   })
 
-  it('小增量跟随近乎瞬时完成，底部状态行不缓慢漂移', () => {
+  it('贴底小增量跟随：瞬时滚动 + 整列入场推升（ChatAnimation 式）', () => {
     const el = makeScroller(1100, 100)
+    const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    status.textContent = 'Deep diving...'
+    flow.append(status)
+
     const controller = new ScrollFlowController(el).attach()
     scrollMock.set(970) // 已贴底，只有 30px 增量
 
-    el.scrollTop = 1100 // 新 floor = 1000，距离仅 30px
+    el.scrollTop = 1100 // 新 floor = 1000
 
-    // 自适应时长应为 200 * (30/200) = 30ms，几帧内完成。
-    stepFrames(64)
+    // 滚动位置瞬时落到新底部（不依赖 scrollTop 动画，流式时不会震动）。
     expect(scrollMock.get()).toBe(1000)
     expect(controller.following).toBe(false)
+    // 整列先向下压，再平滑回位；状态行反向抵消保持固定。
+    expect(controller.entering).toBe(true)
+    stepFrames(64)
+    expect(controller.entryShift).toBeGreaterThan(0)
+    expect(controller.entryShift).toBeLessThan(28)
+    expect(flow.style.transform).not.toBe('')
+    expect(status.style.transform).not.toBe('')
+
+    // 动画结束：位移归零，transform 清空。
+    stepFrames(400)
+    expect(controller.entering).toBe(false)
+    expect(controller.entryShift).toBe(0)
+    expect(flow.style.transform).toBe('')
+    expect(status.style.transform).toBe('')
+  })
+
+  it('高频连续跟随不重启入场动画（流式逐 token 稳定）', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+    scrollMock.set(970)
+
+    el.scrollTop = 1100
+    stepFrames(16)
+    const afterFirst = controller.entryShift
+    expect(controller.entering).toBe(true)
+
+    // 16ms 后再次小增量跟随（同目标）：不应从 28px 重新下压。
+    el.scrollTop = 1100
+    stepFrames(16)
+    expect(controller.entering).toBe(true)
+    expect(controller.entryShift).toBeLessThan(afterFirst)
+
+    stepFrames(400)
+    expect(controller.entering).toBe(false)
+    expect(controller.entryShift).toBe(0)
   })
 
   it('非跟随写入（恢复位置 / prepend 锚定）瞬时通过', () => {
@@ -203,6 +243,12 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(scrollMock.get()).toBe(500)
     expect(controller.reported).toBe(500)
     expect(controller.following).toBe(false)
+  })
+
+  it('attach / dispose 在存在 ResizeObserver 时正常（flow 高度监视不抛错）', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+    expect(() => controller.dispose()).not.toThrow()
   })
 
   it('大幅自动滚动动画期间状态行钉在最终位置，不随动画漂移', () => {

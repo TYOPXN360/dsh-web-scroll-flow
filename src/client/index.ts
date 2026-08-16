@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { ScrollFlowController, type ScrollFlowOptions } from './scroll-flow-controller.ts'
+import { TypewriterController } from './typewriter.ts'
 import {
   followOptionsForMode, ScrollFlowPolicy, SCROLL_FLOW_SETTINGS_NAMESPACE,
   type ScrollFlowSettings,
@@ -29,26 +30,43 @@ export interface ScrollFlowInstall {
   dispose(): void
 }
 
+interface ScrollportEntry {
+  controller: ScrollFlowController
+  typewriter: TypewriterController | null
+}
+
 /**
- * 在给定根节点下安装滚动动效：同步扫描现有容器，并用 MutationObserver
- * 跟随后续的挂载 / 卸载（会话打开、视图切换、面板折叠都会增减容器）。
+ * 在给定根节点下安装滚动动效与逐字吐字动画：同步扫描现有容器，并用
+ * MutationObserver 跟随后续的挂载 / 卸载（会话打开、视图切换、面板折叠
+ * 都会增减容器）。
  * @param root - 扫描与观察的根节点（通常为 document）。
  * @param options - 初始动效配置。
+ * @param typewriter - 是否启用逐字吐字动画（跟随动画档位）。
  * @returns 卸载句柄。
  */
-export function installScrollFlow(root: ParentNode, options: ScrollFlowOptions = {}): ScrollFlowInstall {
-  const controllers = new Map<HTMLElement, ScrollFlowController>()
+export function installScrollFlow(
+  root: ParentNode,
+  options: ScrollFlowOptions = {},
+  typewriter = false,
+): ScrollFlowInstall {
+  const entries = new Map<HTMLElement, ScrollportEntry>()
   const sync = (): void => {
     const elements = Array.from(root.querySelectorAll<HTMLElement>(SCROLLPORT_SELECTOR))
     for (const element of elements) {
-      if (!controllers.has(element)) {
-        controllers.set(element, new ScrollFlowController(element, options).attach())
+      if (!entries.has(element)) {
+        entries.set(element, {
+          controller: new ScrollFlowController(element, options).attach(),
+          typewriter: typewriter
+            ? new TypewriterController(element.querySelector<HTMLElement>('[data-chat-flow]') ?? element).attach()
+            : null,
+        })
       }
     }
-    for (const [element, controller] of controllers) {
+    for (const [element, entry] of entries) {
       if (!element.isConnected) {
-        controller.dispose()
-        controllers.delete(element)
+        entry.controller.dispose()
+        entry.typewriter?.dispose()
+        entries.delete(element)
       }
     }
   }
@@ -59,12 +77,15 @@ export function installScrollFlow(root: ParentNode, options: ScrollFlowOptions =
   observer?.observe(root as Node, { childList: true, subtree: true })
   return {
     setOptions(next: ScrollFlowOptions): void {
-      for (const controller of controllers.values()) controller.setOptions(next)
+      for (const entry of entries.values()) entry.controller.setOptions(next)
     },
     dispose(): void {
       observer?.disconnect()
-      for (const controller of controllers.values()) controller.dispose()
-      controllers.clear()
+      for (const entry of entries.values()) {
+        entry.controller.dispose()
+        entry.typewriter?.dispose()
+      }
+      entries.clear()
     },
   }
 }
@@ -86,9 +107,16 @@ export function apply(ctx: Context): void {
   })
 
   ctx.effect(() => {
-    const install = installScrollFlow(document, syncInstallOptions())
+    const install = installScrollFlow(
+      document,
+      syncInstallOptions(),
+      policy.followMode.getSnapshot() !== 'off',
+    )
     const disposeFollow = policy.followMode.subscribe(() => {
       install.setOptions({ follow: followOptionsForMode(policy.followMode.getSnapshot()) })
+      // 档位关闭时也关掉打字机；重新开启时无法在已挂载的安装上补装，
+      // 由页面刷新/会话重挂自然恢复。
+      if (policy.followMode.getSnapshot() === 'off') install.setOptions({ follow: null })
     })
     const disposeBounce = policy.bounceEnabled.subscribe(() => {
       install.setOptions({ bounce: policy.bounceEnabled.getSnapshot() ? undefined : null })
