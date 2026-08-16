@@ -353,22 +353,27 @@ describe('ScrollFlowController — 自动跟随动画', () => {
 })
 
 describe('ScrollFlowController — 边缘回弹', () => {
-  it('顶部继续向上滚：内容向下拉伸后弹簧回弹归零', () => {
+  it('顶部继续向上滚：内容跟手向下拉伸，松手后弹簧回弹归零', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
     const controller = new ScrollFlowController(el).attach()
 
     el.dispatchEvent(makeWheel(-100))
-    expect(controller.bounceShift).toBe(0)
-    stepFrames(16)
+    // 跟手：滚轮事件直接累积位移，无需等待帧。
     expect(controller.bounceShift).toBeGreaterThan(0)
+    stepFrames(16)
     expect(flow.style.transform).toContain('translateY')
 
-    // 松手后（超过 releaseDelay）拉伸释放，弹簧把位移带回 0。
+    // 继续滚：不松手就一直跟手拉动（无硬上限，软增益递减）。
+    el.dispatchEvent(makeWheel(-100))
+    el.dispatchEvent(makeWheel(-100))
+    const continued = controller.bounceShift
+    expect(continued).toBeGreaterThan(24)
+
+    // 松手后（超过 releaseDelay）弹簧把位移带回 0。
     stepFrames(150)
-    stepFrames(1_000)
+    stepFrames(2_000)
     expect(controller.bounceShift).toBeCloseTo(0, 1)
-    expect(flow.style.transform).toBe('')
     expect(flow.style.transform).toBe('')
   })
 
@@ -457,17 +462,24 @@ describe('ScrollFlowController — 边缘回弹', () => {
     expect(pending.style.transform).toBe('')
   })
 
-  it('可配置幅度与灵敏度', () => {
+  it('可配置灵敏度：同样滚轮输入产生按灵敏度放大的跟手位移', () => {
     const el = makeScroller(1100, 100)
-    const controller = new ScrollFlowController(el, {
-      bounce: { amplitude: 10, pullRate: 24, stiffness: 160, damping: 12, sensitivity: 50, releaseDelay: 120 },
+    const low = new ScrollFlowController(el, {
+      bounce: { amplitude: 24, stiffness: 160, damping: 12, sensitivity: 200, releaseDelay: 120 },
     }).attach()
+    el.dispatchEvent(makeWheel(-200))
+    const lowShift = low.bounceShift
+    low.dispose()
 
-    el.dispatchEvent(makeWheel(-200)) // 灵敏度 50 → 一次拉满
-    stepFrames(16)
-    stepFrames(32)
-    expect(controller.bounceShift).toBeGreaterThan(5)
-    expect(controller.bounceShift).toBeLessThanOrEqual(10)
+    const high = new ScrollFlowController(el, {
+      bounce: { amplitude: 24, stiffness: 160, damping: 12, sensitivity: 50, releaseDelay: 120 },
+    }).attach()
+    el.dispatchEvent(makeWheel(-200))
+    const highShift = high.bounceShift
+    high.dispose()
+
+    expect(lowShift).toBeGreaterThan(0)
+    expect(highShift).toBeGreaterThan(lowShift)
   })
 })
 

@@ -214,6 +214,32 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
+  it('光标节点复用：多次 tick 不重建光标，思维链连续文本也有光标', async () => {
+    const { flow, markdowns, shells } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const shell = shells[0]!
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    await growText(markdown, '思维链连续输出')
+    const overlay = shell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)!
+    const first = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
+    expect(first).not.toBeNull()
+
+    // 多次 tick，光标应始终存在且是同一个节点（复用）。
+    for (let i = 0; i < 3; i++) {
+      clock += 16
+      typewriter.tick(clock)
+    }
+    const after = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
+    expect(after).toBe(first)
+    typewriter.dispose()
+  })
+
   it('overlay 自身 mutation 不会误重启打字机', async () => {
     const { flow, markdowns, shells } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!

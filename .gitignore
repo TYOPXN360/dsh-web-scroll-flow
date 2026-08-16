@@ -1,5 +1,7 @@
 node_modules/
-lib/
+.pnpm-store-dev/
 dist/
+lib/*.map
+lib/client.ts.map
 *.log
 .DS_Store

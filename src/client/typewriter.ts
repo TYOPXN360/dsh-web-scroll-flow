@@ -29,6 +29,11 @@ export interface TypewriterOptions {
    * 打字机（避免刷新 / 首次打开时整页历史消息一起打字）。默认 1200。
    */
   loadGrace: number
+  /**
+   * 恢复回调：打字结束恢复原始 Markdown（布局高度突变）前触发，用于
+   * 让同一滚动容器的控制器抑制"入场回弹"。
+   */
+  onRestore?: () => void
 }
 
 const DEFAULT_OPTIONS: TypewriterOptions = {
@@ -290,8 +295,14 @@ export class TypewriterController {
   private renderOverlay(session: TypewriterSession): void {
     const overlay = session.overlay
     if (overlay === null) return
-    // 仅重建段落文本，保留段落 div（避免光标/焦点抖动）；先清掉旧段落。
-    for (const child of Array.from(overlay.children)) child.remove()
+    // 光标节点复用：先取出现有光标，清段落时保留它，避免高频流式下
+    // 光标反复移除/重建导致思维链里看不到光标。
+    const cursor = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
+      ?? this.createCursor()
+    for (const child of Array.from(overlay.children)) {
+      if (child === cursor) continue
+      child.remove()
+    }
     const prefix = session.targetText.slice(0, session.shownChars)
     const paragraphs = prefix.split('\n\n').filter(segment => segment !== '' || session.shownChars === 0)
     let lastParagraph: HTMLDivElement | null = null
@@ -305,17 +316,16 @@ export class TypewriterController {
       overlay.appendChild(p)
       lastParagraph = p
     })
-    // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，而非覆盖层末尾。
-    this.attachCursor(lastParagraph === null ? overlay : lastParagraph, overlay)
+    // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，否则覆盖层根。
+    const anchor = lastParagraph === null ? overlay : lastParagraph
+    if (cursor.parentElement !== anchor) anchor.appendChild(cursor)
   }
 
-  private attachCursor(anchor: HTMLElement, overlay: HTMLElement): void {
-    const existing = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
-    existing?.remove()
+  private createCursor(): HTMLSpanElement {
     const cursor = document.createElement('span')
     cursor.className = `${TYPEWRITER_OVERLAY_CLASS}-cursor`
     cursor.style.cssText = Object.entries(CURSOR_STYLE).map(([k, v]) => `${k}:${v}`).join(';')
-    anchor.appendChild(cursor)
+    return cursor
   }
 
   /** 流式稳定：结束打字，保留光标一小段时间后恢复原始 Markdown。 */
@@ -333,6 +343,8 @@ export class TypewriterController {
     clearTimeout(session.holdTimer)
     session.settleTimer = undefined
     session.holdTimer = undefined
+    // 恢复原始 Markdown 前通知同一容器的 controller 抑制入场推升。
+    this.options.onRestore?.()
     if (session.markdown.style.display === 'none') session.markdown.style.display = ''
     if (session.overlay !== null) {
       session.overlay.remove()

@@ -26,6 +26,8 @@ export const inject = ['slots', 'settingsScope']
 export interface ScrollFlowInstall {
   /** 更新全部控制器的动效配置（设置面板切换档位 / 弹簧开关）。 */
   setOptions(options: ScrollFlowOptions): void
+  /** 启用 / 停用逐字打字机效果。 */
+  setTypewriterEnabled(enabled: boolean): void
   /** 卸载全部控制器并停止观察。 */
   dispose(): void
 }
@@ -54,10 +56,14 @@ export function installScrollFlow(
     const elements = Array.from(root.querySelectorAll<HTMLElement>(SCROLLPORT_SELECTOR))
     for (const element of elements) {
       if (!entries.has(element)) {
+        const controller = new ScrollFlowController(element, options).attach()
         entries.set(element, {
-          controller: new ScrollFlowController(element, options).attach(),
+          controller,
           typewriter: typewriter
-            ? new TypewriterController(element.querySelector<HTMLElement>('[data-chat-flow]') ?? element).attach()
+            ? new TypewriterController(
+              element.querySelector<HTMLElement>('[data-chat-flow]') ?? element,
+              { onRestore: () => { controller.suppressEntryFor(600) } },
+            ).attach()
             : null,
         })
       }
@@ -78,6 +84,20 @@ export function installScrollFlow(
   return {
     setOptions(next: ScrollFlowOptions): void {
       for (const entry of entries.values()) entry.controller.setOptions(next)
+    },
+    setTypewriterEnabled(enabled: boolean): void {
+      for (const entry of entries.values()) {
+        if (enabled && entry.typewriter === null) {
+          entry.typewriter = new TypewriterController(
+            entry.controller.element.querySelector<HTMLElement>('[data-chat-flow]')
+              ?? entry.controller.element,
+            { onRestore: () => { entry.controller.suppressEntryFor(600) } },
+          ).attach()
+        } else if (!enabled && entry.typewriter !== null) {
+          entry.typewriter.dispose()
+          entry.typewriter = null
+        }
+      }
     },
     dispose(): void {
       observer?.disconnect()
@@ -110,7 +130,7 @@ export function apply(ctx: Context): void {
     const install = installScrollFlow(
       document,
       syncInstallOptions(),
-      policy.followMode.getSnapshot() !== 'off',
+      policy.typewriterEnabled.getSnapshot(),
     )
     const disposeFollow = policy.followMode.subscribe(() => {
       install.setOptions({ follow: followOptionsForMode(policy.followMode.getSnapshot()) })
@@ -121,9 +141,13 @@ export function apply(ctx: Context): void {
     const disposeBounce = policy.bounceEnabled.subscribe(() => {
       install.setOptions({ bounce: policy.bounceEnabled.getSnapshot() ? undefined : null })
     })
+    const disposeTypewriter = policy.typewriterEnabled.subscribe(() => {
+      install.setTypewriterEnabled(policy.typewriterEnabled.getSnapshot())
+    })
     return () => {
       disposeFollow()
       disposeBounce()
+      disposeTypewriter()
       install.dispose()
     }
   })
@@ -136,9 +160,11 @@ export function apply(ctx: Context): void {
       hooks: {
         followMode: policy.followMode,
         bounceEnabled: policy.bounceEnabled,
+        typewriterEnabled: policy.typewriterEnabled,
       },
       setFollowMode: (mode) => { policy.setFollowMode(mode) },
       setBounceEnabled: (enabled) => { policy.setBounceEnabled(enabled) },
+      setTypewriterEnabled: (enabled) => { policy.setTypewriterEnabled(enabled) },
     }),
   }, ScrollFlowSettingsRow))
 }

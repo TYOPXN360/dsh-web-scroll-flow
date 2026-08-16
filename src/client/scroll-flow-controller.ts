@@ -22,17 +22,19 @@
  * - 只有明确的用户输入（滚轮 / 触摸 / 鼠标按下 / 键盘滚动）会打断动画。
  */
 
-/** 回弹的弹簧状态机参数。 */
+/** 回弹的橡皮筋状态机参数。 */
 export interface BounceOptions {
-  /** 回弹最大幅度（px）。默认 24。 */
+  /**
+   * 软增益参考距离（px）：拉动越远，单位滚轮输入产生的位移越小
+   * （增益 = 1/(1+|offset|/amplitude)），但是无硬上限——只要一直滚，
+   * 内容就一直跟手；松手后弹簧回中。默�达 24。
+   */
   amplitude: number
-  /** 拉动阶段跟手速率（1/s）。默认 24。 */
-  pullRate: number
   /** 释放阶段弹簧刚度（1/s²）。默认 160。 */
   stiffness: number
   /** 释放阶段弹簧阻尼（1/s）。默认 12。 */
   damping: number
-  /** 滚轮灵敏度：多少 deltaY 拉满一次回弹。默认 140。 */
+  /** 滚轮灵敏度：多少 deltaY 折算成一次 amplitude 的拉动。默认 140。 */
   sensitivity: number
   /** 滚轮停止多久后进入释放回弹（ms）。默认 120。 */
   releaseDelay: number
@@ -60,7 +62,6 @@ export interface ScrollFlowOptions {
 const DEFAULT_FOLLOW: FollowOptions = { duration: 200 }
 const DEFAULT_BOUNCE: BounceOptions = {
   amplitude: 24,
-  pullRate: 24,
   stiffness: 160,
   damping: 12,
   sensitivity: 140,
@@ -122,11 +123,12 @@ export class ScrollFlowController {
   private lastEntryStartAt = 0
   /** 当前入场推升位移（px，正 = 列向下压）。 */
   private entryOffset = 0
-  /** 边缘回弹状态。 */
+  /** 抑制入场推升的截止时间：布局恢复（打字结束）引起的高度突变不应被当新内容入场。 */
+  private suppressEntryUntil = 0
+  /** 边缘回弹状态：跟手位移（px，顶边缘为正/向下拉，底边缘为负/向上拉）。 */
   private bounceOffset = 0
   private bounceVelocity = 0
-  private stretch = 0
-  private bounceDirection = 0
+  private releasing = false
   private lastWheelAt = 0
   private bounceTarget: HTMLElement | null = null
   /** flow 高度监视：检测内容收回（高度减小）时清位移，避免与浏览器 clamp 叠加成"撞墙回弹"。 */
@@ -137,9 +139,11 @@ export class ScrollFlowController {
   private disposed = false
   private reducedMotion = false
 
-  /** 滚轮：用户手动滚动 → 打断动画；仅当手势直达容器边缘且未被子滚动框消费时累积回弹拉伸。 */
+  /** 滚轮：用户手动滚动 → 打断动画；边缘继续向外滚时跟手拉动（无上限），
+   *  滚轮停止 releaseDelay 后松手释放弹簧回中。 */
   private readonly onWheel = (event: WheelEvent): void => {
-    this.cancelAll()
+    this.cancelAnimation()
+    this.cancelEntry()
     if (this.bounce === null || this.disposed || this.reducedMotion
       || event.defaultPrevented || event.deltaY === 0) return
     // 事件来自容器内部的滚动元素（消息详情、代码块等）时保持原生滚动，
@@ -153,14 +157,19 @@ export class ScrollFlowController {
     const atBottom = floor - real <= 1
     const pushingOut = (event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)
     if (!pushingOut) {
-      this.release()
+      // 正常滚动方向：立即进入释放，让残留的橡皮筋平滑回中。
+      this.beginRelease()
       return
     }
     this.lastWheelAt = performance.now()
     // 顶边缘：内容向下拉（+y）；底边缘：内容向上拉（-y）。
-    this.bounceDirection = event.deltaY < 0 ? 1 : -1
-    const delta = Math.abs(event.deltaY)
-    this.stretch = Math.min(1, this.stretch + Math.min(1, delta / this.bounce.sensitivity))
+    const direction = event.deltaY < 0 ? 1 : -1
+    // 跟手累积：软增益递减，无硬上限（一直滚就一直拉）。
+    const unit = Math.abs(event.deltaY) / this.bounce.sensitivity * this.bounce.amplitude
+    const gain = 1 / (1 + Math.abs(this.bounceOffset) / Math.max(1, this.bounce.amplitude))
+    this.bounceOffset += direction * unit * gain
+    this.bounceVelocity = 0
+    this.releasing = false
     this.ensureFrame()
   }
 
@@ -235,7 +244,7 @@ export class ScrollFlowController {
       this.cancelEntry()
     }
     if (this.bounce === null) {
-      this.release()
+      this.resetBounce()
       this.applyFlowTransform()
     }
   }
@@ -281,7 +290,7 @@ export class ScrollFlowController {
       if (flow.offsetHeight < this.lastFlowHeight) {
         this.cancelAnimation()
         this.cancelEntry()
-        this.release()
+        this.resetBounce()
         this.resetFlowTransform()
       }
       this.lastFlowHeight = flow.offsetHeight
@@ -319,6 +328,11 @@ export class ScrollFlowController {
   /** 是否正在执行贴底入场推升动画。 */
   get entering(): boolean {
     return this.entryActive
+  }
+
+  /** 在指定时长内抑制贴底入场推升（打字机恢复布局等非流式高度突变）。 */
+  suppressEntryFor(durationMs: number): void {
+    this.suppressEntryUntil = performance.now() + durationMs
   }
 
   /** 当前回弹位移（px）。 */
@@ -377,6 +391,8 @@ export class ScrollFlowController {
   /** 贴底入场推升：整列先下压 ENTRY_PUSH_PX，再平滑回位（ChatAnimation 式）。 */
   private startEntryPush(): void {
     if (this.resolveBounceTarget() === null || this.follow === null) return
+    // 打字机恢复布局等非流式高度突变期间抑制入场，避免"打完字回弹"。
+    if (performance.now() < this.suppressEntryUntil) return
     const now = performance.now()
     // 流式逐 token 时高频到达：已有动画在播就不重启，避免连续下压抖动。
     if (this.entryActive && now - this.lastEntryStartAt < ENTRY_MIN_INTERVAL) return
@@ -405,13 +421,25 @@ export class ScrollFlowController {
   private cancelAll(): void {
     this.cancelAnimation()
     this.cancelEntry()
-    this.release()
+    this.resetBounce()
   }
 
-  /** 释放回弹：清空拉伸累积，弹簧把位移带回 0。 */
-  private release(): void {
-    this.stretch = 0
-    this.bounceDirection = 0
+  /** 清除回弹状态（触控 / 关闭设置等用户操作，瞬时清干净）。 */
+  private resetBounce(): void {
+    this.bounceOffset = 0
+    this.bounceVelocity = 0
+    this.releasing = false
+    this.applyFlowTransform()
+  }
+
+  /** 松手释放：进入弹簧回中模式（offset 保留不回零，弹簧带回）。 */
+  private beginRelease(): void {
+    if (Math.abs(this.bounceOffset) <= REST_EPSILON) {
+      this.resetBounce()
+      return
+    }
+    this.releasing = true
+    this.bounceVelocity = 0
   }
 
   private syncReducedMotion(): void {
@@ -527,34 +555,30 @@ export class ScrollFlowController {
       }
     }
 
-    // 3) 边缘回弹：有内容目标时才推进（拉动跟手 + 松手弹簧回中）。
+    // 3) 边缘回弹：滚轮还在边缘拉动时跟手保持；滚轮停止 releaseDelay
+    //    后进入弹簧回中（松手释放）。
     if (this.bounce !== null && this.resolveBounceTarget() !== null) {
       const idleMs = now - this.lastWheelAt
-      if (idleMs > this.bounce.releaseDelay && this.stretch !== 0) {
-        // 松手：拉伸按指数衰减，位移由弹簧带回。
-        this.stretch *= Math.exp(-6 * Math.min(1, idleMs / 1000))
-        if (this.stretch < 0.01) this.release()
+      if (idleMs > this.bounce.releaseDelay && !this.releasing
+        && Math.abs(this.bounceOffset) > REST_EPSILON) {
+        this.beginRelease()
       }
-      const targetOffset = this.bounceDirection * this.stretch * this.bounce.amplitude
-      const dt = 0.016
-      if (Math.abs(targetOffset) > 0.5) {
-        // 拉动阶段：跟手逼近目标，不积累弹簧速度。
-        this.bounceOffset += (targetOffset - this.bounceOffset)
-          * Math.min(1, this.bounce.pullRate * dt)
-        this.bounceVelocity = 0
-      } else {
-        // 释放阶段：弹簧把位移带回 0（小幅过冲）。
+      if (this.releasing) {
+        const dt = 0.016
         this.bounceVelocity += -this.bounceOffset * this.bounce.stiffness * dt
         this.bounceVelocity *= Math.exp(-this.bounce.damping * dt)
         this.bounceOffset += this.bounceVelocity * dt
-      }
-      const settled = Math.abs(this.bounceOffset) <= REST_EPSILON
-        && Math.abs(this.bounceVelocity) <= REST_EPSILON
-        && Math.abs(targetOffset) <= REST_EPSILON
-      if (settled) {
-        this.bounceOffset = 0
-        this.bounceVelocity = 0
-      } else {
+        const settled = Math.abs(this.bounceOffset) <= REST_EPSILON
+          && Math.abs(this.bounceVelocity) <= REST_EPSILON
+        if (settled) {
+          this.bounceOffset = 0
+          this.bounceVelocity = 0
+          this.releasing = false
+        } else {
+          active = true
+        }
+      } else if (Math.abs(this.bounceOffset) > REST_EPSILON) {
+        // 跟手拉动中：保持帧循环，等待滚轮停止后进入释放。
         active = true
       }
     }

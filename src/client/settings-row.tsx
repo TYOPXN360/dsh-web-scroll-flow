@@ -12,9 +12,11 @@ export interface ScrollFlowSettingsRowInjected {
   hooks: {
     followMode: SnapshotStore<FollowMode>
     bounceEnabled: SnapshotStore<boolean>
+    typewriterEnabled: SnapshotStore<boolean>
   }
   setFollowMode: (mode: FollowMode) => void
   setBounceEnabled: (enabled: boolean) => void
+  setTypewriterEnabled: (enabled: boolean) => void
 }
 
 export type ScrollFlowSettingsRowProps =
@@ -60,12 +62,26 @@ const controlStyle: Record<string, string> = {
   padding: '4px 8px',
 }
 
-/** General 设置行：滚动动画档位 + 弹簧开关。 */
+/** General 设置行：滚动动画档位 + 边缘回弹 + 打字机效果。 */
 export function ScrollFlowSettingsRow({
-  useFollowMode, useBounceEnabled, setFollowMode, setBounceEnabled,
+  useFollowMode, useBounceEnabled, useTypewriterEnabled,
+  setFollowMode, setBounceEnabled, setTypewriterEnabled,
 }: ScrollFlowSettingsRowProps): ReactElement {
   const mode = useFollowMode(value => value)
   const bounceEnabled = useBounceEnabled(value => value)
+  const typewriterEnabled = useTypewriterEnabled(value => value)
+
+  const renderCheckbox = (
+    label: string,
+    checked: boolean,
+    onChange: (value: boolean) => void,
+  ): ReactElement => createElement('input', {
+    type: 'checkbox',
+    checked,
+    style: { width: '16px', height: '16px', accentColor: 'var(--dsw-static-deepseek-500)' },
+    onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.checked) },
+    'aria-label': label,
+  })
 
   return createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' } },
     createElement('div', { style: rowStyle },
@@ -89,15 +105,14 @@ export function ScrollFlowSettingsRow({
         createElement('div', { style: titleStyle }, '边缘回弹'),
         createElement('div', { style: descStyle }, '手动滚动到顶部 / 底部时的弹簧回弹效果'),
       ),
-      createElement('input', {
-        type: 'checkbox',
-        checked: bounceEnabled,
-        style: { width: '16px', height: '16px', accentColor: 'var(--dsw-static-deepseek-500)' },
-        onChange: (event: ChangeEvent<HTMLInputElement>) => {
-          setBounceEnabled(event.target.checked)
-        },
-        'aria-label': '边缘回弹',
-      }),
+      renderCheckbox('边缘回弹', bounceEnabled, setBounceEnabled),
+    ),
+    createElement('div', { style: rowStyle },
+      createElement('div', { style: textStyle },
+        createElement('div', { style: titleStyle }, '打字机效果'),
+        createElement('div', { style: descStyle }, '流式输出时以字为单位逐字显示，并带闪烁光标'),
+      ),
+      renderCheckbox('打字机效果', typewriterEnabled, setTypewriterEnabled),
     ),
   )
 }

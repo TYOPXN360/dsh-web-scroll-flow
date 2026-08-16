@@ -14,14 +14,17 @@ export type FollowMode = 'off' | 'gentle' | 'medium'
 export interface ScrollFlowSettings {
   followMode: FollowMode
   bounceEnabled: boolean
+  typewriterEnabled: boolean
 }
 
 export const SCROLL_FLOW_SETTINGS_NAMESPACE = 'dsh-web-scroll-flow'
 export const FOLLOW_MODE_FIELD = 'followMode'
 export const BOUNCE_ENABLED_FIELD = 'bounceEnabled'
+export const TYPEWRITER_ENABLED_FIELD = 'typewriterEnabled'
 
 export const DEFAULT_FOLLOW_MODE: FollowMode = 'medium'
 export const DEFAULT_BOUNCE_ENABLED = true
+export const DEFAULT_TYPEWRITER_ENABLED = true
 
 /** 适中：当前幅度（200ms 大距离平滑）。 */
 const MEDIUM_FOLLOW: FollowOptions = { duration: 200 }
@@ -44,6 +47,7 @@ export function followOptionsForMode(mode: FollowMode): FollowOptions | null {
 export class ScrollFlowPolicy {
   readonly followMode: SnapshotStore<FollowMode> = createSnapshotStore(DEFAULT_FOLLOW_MODE)
   readonly bounceEnabled: SnapshotStore<boolean> = createSnapshotStore(DEFAULT_BOUNCE_ENABLED)
+  readonly typewriterEnabled: SnapshotStore<boolean> = createSnapshotStore(DEFAULT_TYPEWRITER_ENABLED)
   private readonly host: SettingsScope<ScrollFlowSettings> | undefined
 
   /**
@@ -71,6 +75,13 @@ export class ScrollFlowPolicy {
     void this.host?.set(BOUNCE_ENABLED_FIELD, enabled)
   }
 
+  /** 切换逐字打字机效果开关。 */
+  setTypewriterEnabled(enabled: boolean): void {
+    if (this.typewriterEnabled.getSnapshot() === enabled) return
+    this.typewriterEnabled.set(enabled)
+    void this.host?.set(TYPEWRITER_ENABLED_FIELD, enabled)
+  }
+
   private adopt(host: SettingsScope<ScrollFlowSettings>): void {
     const section = host.getSnapshot().value
     if (section === undefined) return
@@ -80,6 +91,9 @@ export class ScrollFlowPolicy {
     }
     if (typeof section.bounceEnabled === 'boolean') {
       this.bounceEnabled.set(section.bounceEnabled)
+    }
+    if (typeof section.typewriterEnabled === 'boolean') {
+      this.typewriterEnabled.set(section.typewriterEnabled)
     }
   }
 }
