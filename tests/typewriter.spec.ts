@@ -73,35 +73,6 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
-  it('宽限期内新增的流式消息在持续增长后启动打字机', async () => {
-    const { flow, shells } = makeMarkdownFlow([''])
-    const shell = shells[0]!
-    const typewriter = new TypewriterController(
-      flow,
-      { loadGrace: 1000, baseSpeed: 0.1, settleDelay: 500, cursorHold: 30 },
-    ).attach()
-
-    // 宽限期内历史节点一次性渲染不启动。
-    await growText(shell.querySelector('[class*="_markdown_"]')!, '历史消息加载')
-    expect(typewriter.active).toBe(false)
-
-    // 新增 markdown 节点：首帧只记录 baseline，不启动。
-    const newShell = document.createElement('div')
-    const newMd = document.createElement('div')
-    newMd.className = '_markdown_abc_new'
-    newMd.textContent = '流'
-    newShell.append(newMd)
-    flow.append(newShell)
-    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(typewriter.active).toBe(false)
-
-    // 第二次增长（前缀扩展）才像流式，启动打字机。
-    await growText(newMd, '流式新消息开始')
-    expect(typewriter.active).toBe(true)
-    expect(newShell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).not.toBeNull()
-    typewriter.dispose()
-  })
-
   it('文本增长时安装覆盖层并逐字吐字，底层不占高度（无整段空白）', async () => {
     const { flow, markdowns, shells } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
@@ -284,21 +255,16 @@ describe('TypewriterController', () => {
       cursorHold: 50,
     }).attach()
 
-    // 首帧：新增短文本（记录 baseline）。
+    // 宽限期后新增节点：首帧即启动（真实思维链可能整段渲染）。
     const md1 = document.createElement('div')
     md1.className = '_markdown_abc'
-    md1.textContent = '思'
-    inner.append(md1)
-    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(typewriter.active).toBe(false)
-
-    // 第二帧：文本增长（同节点）→ 启动。
     md1.textContent = '思维'
+    inner.append(md1)
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
     expect(typewriter.active).toBe(true)
     expect(item.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).not.toBeNull()
 
-    // 第三帧起：React 替换成新 markdown 节点，文本延续 → 迁移打字机。
+    // React 替换成新 markdown 节点，文本延续 → 迁移打字机。
     const md2 = document.createElement('div')
     md2.className = '_markdown_abc'
     md2.textContent = '思维链内容'
@@ -309,6 +275,38 @@ describe('TypewriterController', () => {
     expect(overlay).not.toBeNull()
     expect(overlay!.parentElement).toBe(inner)
     expect(overlay!.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)).not.toBeNull()
+    typewriter.dispose()
+  })
+
+  it('宽限期后整段渲染的新节点也启动打字机（思维链非前缀增长）', async () => {
+    const { flow, shells } = makeMarkdownFlow([''])
+    const shell = shells[0]!
+    const typewriter = new TypewriterController(
+      flow,
+      { loadGrace: 100, baseSpeed: 0.1, settleDelay: 1_000, cursorHold: 50 },
+    ).attach()
+
+    // 宽限期内新增节点（历史分批渲染）不启动。
+    const historyShell = document.createElement('div')
+    const historyMd = document.createElement('div')
+    historyMd.className = '_markdown_abc_history'
+    historyMd.textContent = '历史消息完整文本'
+    historyShell.append(historyMd)
+    flow.append(historyShell)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.active).toBe(false)
+
+    // 宽限期后新增节点：整段一次到位也启动。
+    clock += 100
+    const newShell = document.createElement('div')
+    const newMd = document.createElement('div')
+    newMd.className = '_markdown_abc_new'
+    newMd.textContent = '思维链整段输出内容'
+    newShell.append(newMd)
+    flow.append(newShell)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.active).toBe(true)
+    expect(newShell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).not.toBeNull()
     typewriter.dispose()
   })
 

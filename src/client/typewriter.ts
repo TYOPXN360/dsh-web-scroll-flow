@@ -171,7 +171,7 @@ export class TypewriterController {
     const loading = performance.now() - this.loadedAt < this.options.loadGrace
     for (const markdown of markdowns) {
       const text = markdown.textContent ?? ''
-      const hadBaseline = this.baselineMarkdowns.has(markdown)
+      const isNewNode = !this.baselineMarkdowns.has(markdown)
       const lastSeen = this.lastSeenByMarkdown.get(markdown)
       if (text === lastSeen) continue
       // 只有"持续增长"（新文本是上次文本的前缀扩展）才像流式打字；
@@ -191,10 +191,16 @@ export class TypewriterController {
         this.ensureStreaming(existing)
         continue
       }
-      // attach 时已存在节点在宽限期内的渲染视为历史加载，不启动。
-      if (loading && hadBaseline) continue
-      // 同一消息容器内节点被替换（真实思维链流式）：优先迁移，防止旧
-      // session 在清理循环中被拆掉。
+      // 宽限期内的变化都视为历史加载，不启动。
+      if (loading) continue
+      // 宽限期后出现的新节点：真实新消息，即使整段一次到位也启动打字
+      // （真实思维链可能不是前缀增长，而是整段渲染）。
+      if (isNewNode) {
+        if (this.tryMigrateSession(markdown, text)) continue
+        this.startSession(markdown, text)
+        continue
+      }
+      // 旧节点：同一消息内被替换（思维链流式）时优先迁移；否则需要增长。
       if (this.tryMigrateSession(markdown, text)) continue
       if (!growth) continue
       this.startSession(markdown, text)
