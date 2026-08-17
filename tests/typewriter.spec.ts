@@ -176,6 +176,9 @@ describe('TypewriterController', () => {
     }
     // 克隆的 Markdown 树保留真实节点；无标签的测试 Markdown 仍直接落在根文本节点。
     expect(overlay.textContent ?? '').toContain('第一段内容')
+    const hiddenBlocks = [...overlay.querySelectorAll<HTMLElement>('p,li,pre,blockquote')]
+      .filter(block => block.dataset.dshTypewriterHidden === 'true')
+    expect(hiddenBlocks.length).toBeGreaterThanOrEqual(0)
     typewriter.dispose()
   })
 

@@ -424,6 +424,19 @@ export class TypewriterController {
       if (take > 0) lastVisible = node
       offset += length
     }
+    // Empty Markdown blocks still carry margins/list markers. Collapse them
+    // until their first character arrives so the layout follows the reveal.
+    for (const block of overlay.querySelectorAll<HTMLElement>(
+      'p,li,pre,blockquote,h1,h2,h3,h4,h5,h6,ol,ul',
+    )) {
+      if (block.textContent === '') {
+        block.dataset.dshTypewriterHidden = 'true'
+        block.style.display = 'none'
+      } else if (block.dataset.dshTypewriterHidden === 'true') {
+        delete block.dataset.dshTypewriterHidden
+        block.style.display = ''
+      }
+    }
     if (lastVisible !== null && lastVisible.parentElement !== null) {
       lastVisible.parentElement.insertBefore(cursor, lastVisible.nextSibling)
     } else {
