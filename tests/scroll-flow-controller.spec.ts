@@ -204,7 +204,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(controller.entryShift).toBeGreaterThan(0)
     expect(controller.entryShift).toBeLessThan(28)
     expect(flow.style.transform).not.toBe('')
-    expect(status.style.transform).toBe('')
+    expect(status.style.transform).toBe(`translateY(${(-controller.entryShift).toFixed(2)}px)`)
 
     // 动画结束：位移归零，transform 清空。
     stepFrames(400)
@@ -251,7 +251,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(() => controller.dispose()).not.toThrow()
   })
 
-  it('大幅自动滚动动画不单独改写状态行位置', () => {
+  it('大幅自动滚动动画将状态行钉在最终位置', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
     const status = document.createElement('div')
@@ -264,7 +264,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
 
     stepFrames(64)
     expect(controller.following).toBe(true)
-    expect(status.style.transform).toBe('')
+    expect(status.style.transform).toBe(`translateY(${(scrollMock.get() - 1000).toFixed(2)}px)`)
     expect(flow.style.transform).toBe('')
 
     stepFrames(300)
@@ -453,8 +453,8 @@ describe('ScrollFlowController — 边缘回弹', () => {
 
     expect(controller.bounceShift).toBeGreaterThan(0)
     expect(flow.style.transform).not.toBe('')
-    expect(status.style.transform).toBe('')
-    expect(pending.style.transform).toBe('')
+    expect(status.style.transform).toBe(`translateY(${(-controller.bounceShift).toFixed(2)}px)`)
+    expect(pending.style.transform).toBe(`translateY(${(-controller.bounceShift).toFixed(2)}px)`)
 
     stepFrames(150)
     stepFrames(1_000)

@@ -469,8 +469,20 @@ export class ScrollFlowController {
   }
 
   /**
-   * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform。
-   * 内容列内所有元素保持原有相对布局，不单独改写状态行位置。
+   * 列尾的 Deep diving 与待插话行是 flow 的直接状态行；它们需要钉在
+   * 视口中的原位置，避免跟随消息列的入场/回弹位移。嵌套的历史错误状态
+   * 不参与补偿，避免改变普通消息的布局。
+   */
+  private fixedStatusElements(flow: HTMLElement): HTMLElement[] {
+    return Array.from(flow.children).filter(
+      (child): child is HTMLElement => child instanceof HTMLElement
+        && child.matches('[role="status"], [data-pending-steering]'),
+    )
+  }
+
+  /**
+   * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform；直接状态行
+   * 用反向位移保持在原位置。
    */
   private applyFlowTransform(): void {
     const target = this.resolveBounceTarget()
@@ -483,6 +495,17 @@ export class ScrollFlowController {
       : ''
     target.style.transform = transform
     target.style.willChange = transform === '' ? '' : 'transform'
+    const followShift = this.animating
+      ? this.nativeGet() - this.animTarget
+      : 0
+    const counterOffset = -offset + followShift
+    const counter = Math.abs(counterOffset) > REST_EPSILON
+      ? `translateY(${counterOffset.toFixed(2)}px)`
+      : ''
+    for (const el of this.fixedStatusElements(target)) {
+      el.style.transform = counter
+      el.style.willChange = counter === '' ? '' : 'transform'
+    }
   }
 
   private resetFlowTransform(): void {
@@ -490,6 +513,10 @@ export class ScrollFlowController {
     if (target === null) return
     target.style.transform = ''
     target.style.willChange = ''
+    for (const el of this.fixedStatusElements(target)) {
+      el.style.transform = ''
+      el.style.willChange = ''
+    }
   }
 
   private ensureFrame(): void {
