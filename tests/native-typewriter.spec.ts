@@ -193,8 +193,8 @@ describe('TypewriterController — 原生模式', () => {
       cursorHold: 50,
     }).attach()
 
-    await growText(think, '思考中')
-    await growText(body, '回答')
+    await growText(think, '思考中'.repeat(6))
+    await growText(body, '回答'.repeat(6))
 
     expect(typewriter.active).toBe(true)
     expect(cursorOf(think)).not.toBeNull()
@@ -202,7 +202,14 @@ describe('TypewriterController — 原生模式', () => {
 
     clock += 16
     typewriter.tick(clock)
-    expect(typewriter.shown).toBeGreaterThanOrEqual(2)
+    expect(think.textContent.length).toBeGreaterThan(0)
+    expect(body.textContent).toBe('')
+
+    for (let i = 0; i < 30; i++) {
+      clock += 16
+      typewriter.tick(clock)
+    }
+    expect(body.textContent.length).toBeGreaterThan(0)
     typewriter.dispose()
   })
 

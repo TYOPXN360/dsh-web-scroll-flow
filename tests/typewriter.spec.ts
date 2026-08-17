@@ -196,8 +196,8 @@ describe('TypewriterController', () => {
       cursorHold: 50,
     }).attach()
 
-    await growText(think, '思考中')
-    await growText(body, '回答')
+    await growText(think, '思考中'.repeat(6))
+    await growText(body, '回答'.repeat(6))
 
     expect(typewriter.active).toBe(true)
     expect(thinkShell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).not.toBeNull()
@@ -205,7 +205,16 @@ describe('TypewriterController', () => {
 
     clock += 16
     typewriter.tick(clock)
-    expect(typewriter.shown).toBeGreaterThanOrEqual(2)
+    const thinkOverlay = thinkShell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)!
+    const bodyOverlay = bodyShell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)!
+    expect(thinkOverlay.textContent.length).toBeGreaterThan(0)
+    expect(bodyOverlay.textContent).toBe('')
+
+    for (let i = 0; i < 30; i++) {
+      clock += 16
+      typewriter.tick(clock)
+    }
+    expect(bodyOverlay.textContent.length).toBeGreaterThan(0)
     typewriter.dispose()
   })
 

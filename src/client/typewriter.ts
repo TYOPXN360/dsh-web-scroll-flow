@@ -323,11 +323,22 @@ export class TypewriterController {
     session.settleTimer = setTimeout(step, interval)
   }
 
+  private pendingSessions(): TypewriterSession[] {
+    return this.markdowns()
+      .map(markdown => this.sessions.get(markdown))
+      .filter((session): session is TypewriterSession => session !== undefined
+        && session.shownChars < session.targetText.length)
+  }
+
   private emitStep(session: TypewriterSession, now: number): void {
     if (session.overlay === null) return
+    const pending = this.pendingSessions()
+    if (pending[0] !== session) return
     const delta = session.lastEmitAt === 0 ? 16 : Math.max(0, now - session.lastEmitAt)
     session.lastEmitAt = now
-    const speed = this.effectiveSpeed(session.targetText.length)
+    // Serialize visual output from top to bottom while preserving the aggregate
+    // throughput that parallel sessions previously produced.
+    const speed = pending.reduce((total, item) => total + this.effectiveSpeed(item.targetText.length), 0)
     const charsToAdd = Math.max(1, Math.floor(delta * speed))
     session.shownChars = Math.min(session.targetText.length, session.shownChars + charsToAdd)
     this.renderOverlay(session)
