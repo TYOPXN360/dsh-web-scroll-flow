@@ -418,25 +418,34 @@ export class TypewriterController {
     const prefix = session.targetText.slice(0, session.shownChars)
     let offset = 0
     let lastVisible: Text | null = null
+    const nodeStarts = new Map<Text, number>()
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i]!
       const length = session.textLengths[i] ?? 0
+      nodeStarts.set(node, offset)
       const take = Math.max(0, Math.min(length, prefix.length - offset))
       node.data = prefix.slice(offset, offset + take)
       if (take > 0) lastVisible = node
       offset += length
     }
-    // Empty Markdown blocks still carry margins/list markers. Collapse them
-    // until their first character arrives so the layout follows the reveal.
+    // Pre-mount the next block just before its first character arrives. Its
+    // box is ready for text, but later blocks do not reserve a whole page.
     for (const block of overlay.querySelectorAll<HTMLElement>(
       'p,li,pre,blockquote,h1,h2,h3,h4,h5,h6,ol,ul',
     )) {
-      if (block.textContent === '') {
+      const starts = this.textNodes(block)
+        .map(node => nodeStarts.get(node))
+        .filter((start): start is number => start !== undefined)
+      const start = starts.length > 0 ? Math.min(...starts) : null
+      const shouldShow = start !== null && session.shownChars >= Math.max(0, start - 1)
+      if (shouldShow) {
+        if (block.dataset.dshTypewriterHidden === 'true') {
+          delete block.dataset.dshTypewriterHidden
+          block.style.display = ''
+        }
+      } else {
         block.dataset.dshTypewriterHidden = 'true'
         block.style.display = 'none'
-      } else if (block.dataset.dshTypewriterHidden === 'true') {
-        delete block.dataset.dshTypewriterHidden
-        block.style.display = ''
       }
     }
     if (lastVisible !== null && lastVisible.parentElement !== null) {
