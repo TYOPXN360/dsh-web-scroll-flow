@@ -470,17 +470,11 @@ export class ScrollFlowController {
 
   /**
    * 回弹时保持固定的"现场状态"元素：列尾的 Deep diving（role=status）
-   * 与待插话消息（data-pending-steering）。它们是 data-chat-flow 的直接
-   * 子元素；消息内部的状态（如重试提示）在消息节点后代里，不在此列。
+   * 与待插话消息（data-pending-steering）。状态行可能包在消息/状态容器中，
+   * 因此按 flow 内匹配，而不是假定它是直接子元素。
    */
   private fixedStatusElements(flow: HTMLElement): HTMLElement[] {
-    const result: HTMLElement[] = []
-    for (const child of flow.children) {
-      if (child instanceof HTMLElement && child.matches('[role="status"], [data-pending-steering]')) {
-        result.push(child)
-      }
-    }
-    return result
+    return Array.from(flow.querySelectorAll<HTMLElement>('[role="status"], [data-pending-steering]'))
   }
 
   /**

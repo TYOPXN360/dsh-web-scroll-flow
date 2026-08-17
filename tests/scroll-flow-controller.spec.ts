@@ -440,13 +440,15 @@ describe('ScrollFlowController — 边缘回弹', () => {
   it('回弹时状态行（Deep diving / 待插话消息）保持固定', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
+    const wrapper = document.createElement('div')
     const status = document.createElement('div')
     status.setAttribute('role', 'status')
     status.textContent = 'Deep diving...'
     const pending = document.createElement('div')
     pending.setAttribute('data-pending-steering', '')
     pending.textContent = '待插话消息'
-    flow.append(status, pending)
+    wrapper.append(status)
+    flow.append(wrapper, pending)
 
     const controller = new ScrollFlowController(el).attach()
     el.dispatchEvent(makeWheel(-100))
