@@ -224,14 +224,24 @@ export class NativeTypewriterController {
         // 污染 targetText，只同步节点长度并截回当前目标。
         const extension = snapshotText.length > existing.targetText.length
           && snapshotText.startsWith(existing.targetText)
+        const sameTarget = snapshotText === existing.targetText
         if (extension) {
           existing.targetText = snapshotText
           existing.lastGrowthAt = performance.now()
           if (existing.shownChars >= existing.targetText.length) {
             existing.shownChars = Math.max(0, existing.targetText.length - 1)
           }
+          existing.textLengths = snapshotLengths
+        } else if (sameTarget) {
+          // React may rebuild the same text with a new Markdown node structure.
+          existing.textLengths = snapshotLengths
+        } else {
+          // Ignore transient shorter / non-prefix commits; the next complete
+          // commit will provide a trustworthy text-node snapshot.
+          this.applyPrefix(existing)
+          this.ensureStreaming(existing)
+          continue
         }
-        existing.textLengths = snapshotLengths
         this.applyPrefix(existing)
         this.ensureStreaming(existing)
         continue

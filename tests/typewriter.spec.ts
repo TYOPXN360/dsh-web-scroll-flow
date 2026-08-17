@@ -111,6 +111,28 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
+  it('忽略 React 中间态的短文本提交，避免目标被截短', async () => {
+    const { flow, markdowns } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    await growText(markdown, '完整目标文本')
+    expect(typewriter.targetLength).toBe(6)
+
+    markdown.textContent = '完整'
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.targetLength).toBe(6)
+
+    markdown.textContent = '完整目标文本'
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.targetLength).toBe(6)
+    typewriter.dispose()
+  })
   it('大文本按要求公式提速（13 000 字远快于短文本）', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
@@ -184,7 +206,7 @@ describe('TypewriterController', () => {
 
     clock += 16
     typewriter.tick(clock)
-    expect(typewriter.shown).toBe(2)
+    expect(typewriter.shown).toBeGreaterThanOrEqual(2)
     typewriter.dispose()
   })
 

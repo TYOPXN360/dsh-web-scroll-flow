@@ -184,18 +184,24 @@ export class TypewriterController {
       const growth = lastSeen !== undefined
         && text.length > lastSeen.length
         && text.startsWith(lastSeen)
-      this.lastSeenByMarkdown.set(markdown, text)
-      if (text.length === 0) continue
       const existing = this.sessions.get(markdown)
       if (existing !== undefined) {
-        existing.targetText = text
-        existing.lastGrowthAt = performance.now()
-        if (existing.shownChars >= existing.targetText.length) {
-          existing.shownChars = Math.max(0, existing.targetText.length - 1)
+        // React / Markdown 可能在一次提交中间短暂写入较短文本；活跃流式目标
+        // 只能接受相同文本或前缀扩展，避免把暂态 DOM 当成完整目标而吞字。
+        const extension = text.length >= existing.targetText.length
+          && text.startsWith(existing.targetText)
+        if (extension) {
+          existing.targetText = text
+          existing.lastGrowthAt = performance.now()
+          this.lastSeenByMarkdown.set(markdown, text)
+          if (existing.shownChars >= existing.targetText.length) {
+            existing.shownChars = Math.max(0, existing.targetText.length - 1)
+          }
         }
         this.ensureStreaming(existing)
         continue
       }
+      this.lastSeenByMarkdown.set(markdown, text)
       // 没有运行状态时，任何文本变化都视为历史加载，不启动。
       if (!running) continue
       // 宽限期内的变化都视为历史加载，不启动。

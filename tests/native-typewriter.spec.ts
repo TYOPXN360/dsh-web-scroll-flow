@@ -119,6 +119,28 @@ describe('TypewriterController — 原生模式', () => {
     typewriter.dispose()
   })
 
+  it('忽略 React 中间态的短文本提交，避免目标被截短', async () => {
+    const { flow, markdowns } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const typewriter = new NativeTypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    await growText(markdown, '完整目标文本')
+    expect(typewriter.targetLength).toBe(6)
+
+    markdown.textContent = '完整'
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+    expect(typewriter.targetLength).toBe(6)
+
+    markdown.textContent = '完整目标文本'
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+    expect(typewriter.targetLength).toBe(6)
+    typewriter.dispose()
+  })
   it('文本停止增长后恢复完整文本并移除光标', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
