@@ -8,7 +8,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { ScrollFlowController, type ScrollFlowOptions } from './scroll-flow-controller.ts'
-import { NativeTypewriterController } from './native-typewriter.ts'
 import { TypewriterController } from './typewriter.ts'
 import {
   followOptionsForMode, ScrollFlowPolicy, SCROLL_FLOW_SETTINGS_NAMESPACE,
@@ -48,14 +47,15 @@ interface ScrollportEntry {
 /** 按模式创建打字机控制器（flow 内 fallback 到滚动容器本身）。 */
 function createTypewriter(
   element: HTMLElement,
-  mode: TypewriterMode,
+  _mode: TypewriterMode,
   controller: ScrollFlowController,
 ): TypewriterLike {
   const flow = element.querySelector<HTMLElement>('[data-chat-flow]') ?? element
   const onRestore = (): void => { controller.suppressEntryFor(600) }
-  return mode === 'native'
-    ? new NativeTypewriterController(flow, { onRestore }).attach()
-    : new TypewriterController(flow, { onRestore }).attach()
+  // Both settings use the non-destructive renderer in production. The former
+  // native path rewrote React Markdown text nodes and could lose text when the
+  // Markdown parser rebuilt inline nodes during a large streamed update.
+  return new TypewriterController(flow, { onRestore }).attach()
 }
 
 /**
