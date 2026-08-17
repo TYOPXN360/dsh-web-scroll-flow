@@ -383,7 +383,7 @@ export class TypewriterController {
     if (shell === null) return
     const overlay = markdown.cloneNode(true) as HTMLDivElement
     overlay.classList.add(TYPEWRITER_OVERLAY_CLASS)
-    overlay.style.display = 'block'
+    overlay.style.display = 'none'
     overlay.style.pointerEvents = 'none'
     overlay.style.userSelect = 'none'
     // Clone the parsed tree so paragraphs, code, and inline Markdown keep their layout.
@@ -401,6 +401,7 @@ export class TypewriterController {
   private renderOverlay(session: TypewriterSession): void {
     let overlay = session.overlay
     if (overlay === null) return
+    overlay.style.display = session.shownChars > 0 ? 'block' : 'none'
     let nodes = this.textNodes(overlay)
     if (nodes.length !== session.textLengths.length) {
       const replacement = session.markdown.cloneNode(true) as HTMLDivElement
@@ -409,6 +410,7 @@ export class TypewriterController {
       overlay.replaceWith(replacement)
       overlay = replacement
       session.overlay = overlay
+      overlay.style.display = session.shownChars > 0 ? 'block' : 'none'
       nodes = this.textNodes(overlay)
     }
     const cursor = overlay.querySelector<HTMLSpanElement>(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)

@@ -93,15 +93,16 @@ describe('TypewriterController', () => {
     expect(typewriter.active).toBe(true)
     const overlay = shell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)
     expect(overlay).not.toBeNull()
-    // markdown 打字期间 display:none，不预留整段空白。
+    // 首字符前 clone 完全不参与布局，避免提前出现 Markdown 空框。
     expect(markdown.style.display).toBe('none')
-    expect(overlay!.style.display).not.toBe('none')
+    expect(overlay!.style.display).toBe('none')
     expect(overlay!.textContent).toBe('')
     expect(overlay!.querySelector('span')).not.toBeNull() // 光标
 
     clock += 16
     typewriter.tick(clock)
     expect(typewriter.shown).toBe(1)
+    expect(overlay!.style.display).toBe('block')
     expect(overlay!.textContent).toBe('你')
 
     clock += 16
