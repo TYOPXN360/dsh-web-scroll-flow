@@ -237,6 +237,13 @@ export class NativeTypewriterController {
         } else if (sameTarget) {
           // React may rebuild the same text with a new Markdown node structure.
           existing.textLengths = snapshotLengths
+        } else if (existing.targetText.startsWith(snapshotText)
+          && snapshotText.length < existing.targetText.length) {
+          // This is our own visible-prefix write being observed again. Keep the
+          // session; only a non-prefix React rewrite should abandon native mode.
+          this.applyPrefix(existing)
+          this.ensureStreaming(existing)
+          continue
         } else {
           // A persistent Markdown rewrite can be non-prefix (for example when
           // a block is normalized). Stop native truncation rather than keeping

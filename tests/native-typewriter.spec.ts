@@ -119,6 +119,27 @@ describe('TypewriterController — 原生模式', () => {
     typewriter.dispose()
   })
 
+  it('观察到自身前缀截断时不退出打字机', async () => {
+    const { flow, markdowns } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const target = '第一段内容\n\n第二段内容'.repeat(8)
+    const typewriter = new NativeTypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 10_000,
+      cursorHold: 50,
+    }).attach()
+
+    await growText(markdown, target)
+    clock += 16
+    typewriter.tick(clock)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.targetLength).toBe(target.length)
+    expect(markdown.textContent.length).toBeLessThan(target.length)
+    typewriter.dispose()
+  })
+
   it('遇到非前缀 Markdown 重建时停止截断并保留 React 文本', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
