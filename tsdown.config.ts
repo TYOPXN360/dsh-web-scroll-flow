@@ -27,7 +27,7 @@ export default defineConfig([
     target: 'es2022',
     fixedExtension: false,
     clean: false,
-    sourcemap: true,
+    sourcemap: false,
     dts: true,
   },
   {
@@ -38,7 +38,7 @@ export default defineConfig([
     platform: 'browser',
     target: 'es2022',
     clean: false,
-    sourcemap: true,
+    sourcemap: false,
     deps: {
       neverBundle: CLIENT_EXTERNALS,
       alwaysBundle: id => (CLIENT_EXTERNALS.includes(id) ? undefined : true),

@@ -18,13 +18,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run build"
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build && git diff --exit-code -- lib"
   },
   "files": [
     "lib/index.js",
     "lib/index.d.ts",
     "lib/client.js",
-    "lib/client.js.map",
     "cordis.patch.yml",
     "README.md"
   ],

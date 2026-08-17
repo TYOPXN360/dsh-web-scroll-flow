@@ -11,4 +11,3 @@ declare const inject: string[];
 declare function apply(ctx: Context): void;
 //#endregion
 export { apply, inject, name };
-//# sourceMappingURL=index.d.ts.map
