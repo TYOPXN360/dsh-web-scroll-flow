@@ -226,10 +226,11 @@ export class TypewriterController {
         continue
       }
       this.lastSeenByMarkdown.set(markdown, text)
-      // 没有运行状态时，任何文本变化都视为历史加载，不启动。
-      if (!running) continue
       // 宽限期内的变化都视为历史加载，不启动。
       if (loading) continue
+      // 状态行可能在最后一批 assistant Markdown 到达前先被移除；已有
+      // 节点的前缀增长仍是当前流式输出，新历史节点则继续保持静态。
+      if (!running && !growth) continue
       // 宽限期后出现的新节点：真实新消息，即使整段一次到位也启动打字
       // （真实思维链可能不是前缀增长，而是整段渲染）。
       if (isNewNode) {
