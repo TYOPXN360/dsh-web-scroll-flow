@@ -251,7 +251,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(() => controller.dispose()).not.toThrow()
   })
 
-  it('大幅自动滚动动画将状态行钉在最终位置', () => {
+  it('大幅自动滚动动画期间状态行随内容隐藏，结束后再出现', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
     const status = document.createElement('div')
@@ -264,7 +264,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
 
     stepFrames(64)
     expect(controller.following).toBe(true)
-    expect(status.style.transform).toBe(`translateY(${(scrollMock.get() - 1000).toFixed(2)}px)`)
+    expect(status.style.transform).toBe('')
     expect(flow.style.transform).toBe('')
 
     stepFrames(300)
@@ -460,6 +460,29 @@ describe('ScrollFlowController — 边缘回弹', () => {
     stepFrames(1_000)
     expect(controller.bounceShift).toBeCloseTo(0, 1)
     expect(flow.style.transform).toBe('')
+  })
+
+  it('待插话节点位于状态行之前时不把状态行顶移', () => {
+    const el = makeScroller(1100, 100)
+    const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
+    const pending = document.createElement('div')
+    pending.setAttribute('data-pending-steering', '')
+    Object.defineProperty(pending, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ height: 32 }),
+    })
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    flow.append(pending, status)
+
+    const controller = new ScrollFlowController(el).attach()
+    el.dispatchEvent(makeWheel(-100))
+    stepFrames(16)
+
+    expect(status.style.transform).toBe(
+      `translateY(${(-controller.bounceShift - 32).toFixed(2)}px)`,
+    )
+    controller.dispose()
   })
 
   it('可配置灵敏度：同样滚轮输入产生按灵敏度放大的跟手位移', () => {

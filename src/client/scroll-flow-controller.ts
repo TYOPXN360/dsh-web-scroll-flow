@@ -480,6 +480,18 @@ export class ScrollFlowController {
     )
   }
 
+  private pendingShiftBefore(status: HTMLElement): number {
+    let shift = 0
+    let sibling = status.previousElementSibling
+    while (sibling !== null) {
+      if (sibling instanceof HTMLElement && sibling.matches('[data-pending-steering]')) {
+        shift += sibling.getBoundingClientRect().height
+      }
+      sibling = sibling.previousElementSibling
+    }
+    return shift
+  }
+
   /**
    * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform；直接状态行
    * 用反向位移保持在原位置。
@@ -495,14 +507,15 @@ export class ScrollFlowController {
       : ''
     target.style.transform = transform
     target.style.willChange = transform === '' ? '' : 'transform'
-    const followShift = this.animating
-      ? this.nativeGet() - this.animTarget
-      : 0
-    const counterOffset = -offset + followShift
-    const counter = Math.abs(counterOffset) > REST_EPSILON
-      ? `translateY(${counterOffset.toFixed(2)}px)`
-      : ''
+    // During a large automatic catch-up, let the status row travel with the
+    // content so it stays out of view until the scroll reaches the bottom.
+    // Pinning applies to manual edge bounce and small entry pushes only.
     for (const el of this.fixedStatusElements(target)) {
+      const pendingShift = el.matches('[role="status"]') ? this.pendingShiftBefore(el) : 0
+      const counterOffset = this.animating ? 0 : -offset - pendingShift
+      const counter = Math.abs(counterOffset) > REST_EPSILON
+        ? `translateY(${counterOffset.toFixed(2)}px)`
+        : ''
       el.style.transform = counter
       el.style.willChange = counter === '' ? '' : 'transform'
     }
