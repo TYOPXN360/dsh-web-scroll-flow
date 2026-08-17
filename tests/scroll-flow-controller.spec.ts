@@ -358,7 +358,9 @@ describe('ScrollFlowController — 边缘回弹', () => {
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
     const controller = new ScrollFlowController(el).attach()
 
-    el.dispatchEvent(makeWheel(-100))
+    const event = makeWheel(-100)
+    expect(el.dispatchEvent(event)).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
     // 跟手：滚轮事件直接累积位移，无需等待帧。
     expect(controller.bounceShift).toBeGreaterThan(0)
     stepFrames(16)
@@ -382,7 +384,9 @@ describe('ScrollFlowController — 边缘回弹', () => {
     const controller = new ScrollFlowController(el).attach()
     scrollMock.set(1000) // 已在底部
 
-    el.dispatchEvent(makeWheel(100))
+    const event = makeWheel(100)
+    expect(el.dispatchEvent(event)).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
     stepFrames(16)
     expect(controller.bounceShift).toBeLessThan(0)
   })
@@ -397,7 +401,9 @@ describe('ScrollFlowController — 边缘回弹', () => {
 
     // 用户滚到中间后继续向上滚：可以正常滚动，释放拉伸，位移弹簧回中。
     scrollMock.set(500)
-    el.dispatchEvent(makeWheel(-100))
+    const event = makeWheel(-100)
+    expect(el.dispatchEvent(event)).toBe(true)
+    expect(event.defaultPrevented).toBe(false)
     stepFrames(800)
     expect(controller.bounceShift).toBeCloseTo(0, 1)
   })

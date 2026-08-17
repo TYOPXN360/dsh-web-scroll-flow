@@ -130,6 +130,7 @@ export class ScrollFlowController {
   private bounceVelocity = 0
   private releasing = false
   private lastWheelAt = 0
+  private bounceFrameAt = 0
   private bounceTarget: HTMLElement | null = null
   /** flow 高度监视：检测内容收回（高度减小）时清位移，避免与浏览器 clamp 叠加成"撞墙回弹"。 */
   private flowObserver: ResizeObserver | null = null
@@ -161,6 +162,8 @@ export class ScrollFlowController {
       this.beginRelease()
       return
     }
+    // 边缘越界时阻止滚动链继续滚动外层页面；正常滚动仍保持原生行为。
+    if (event.cancelable) event.preventDefault()
     this.lastWheelAt = performance.now()
     // 顶边缘：内容向下拉（+y）；底边缘：内容向上拉（-y）。
     const direction = event.deltaY < 0 ? 1 : -1
@@ -169,6 +172,7 @@ export class ScrollFlowController {
     const gain = 1 / (1 + Math.abs(this.bounceOffset) / Math.max(1, this.bounce.amplitude))
     this.bounceOffset += direction * unit * gain
     this.bounceVelocity = 0
+    this.bounceFrameAt = performance.now()
     this.releasing = false
     this.ensureFrame()
   }
@@ -265,7 +269,7 @@ export class ScrollFlowController {
       get: () => this.animating ? this.reportedTop : this.nativeGet(),
       set: (value: number) => { this.onScrollTopWrite(value) },
     })
-    this.element.addEventListener('wheel', this.onWheel, { capture: true, passive: true })
+    this.element.addEventListener('wheel', this.onWheel, { capture: true, passive: false })
     this.element.addEventListener('touchstart', this.onTouchStart, { capture: true, passive: true })
     this.element.addEventListener('mousedown', this.onPointerDown, { capture: true, passive: true })
     this.element.addEventListener('keydown', this.onKeyDown, { capture: true, passive: true })
@@ -429,6 +433,7 @@ export class ScrollFlowController {
     this.bounceOffset = 0
     this.bounceVelocity = 0
     this.releasing = false
+    this.bounceFrameAt = 0
     this.applyFlowTransform()
   }
 
@@ -564,7 +569,10 @@ export class ScrollFlowController {
         this.beginRelease()
       }
       if (this.releasing) {
-        const dt = 0.016
+        const dt = this.bounceFrameAt === 0
+          ? 0.016
+          : clamp((now - this.bounceFrameAt) / 1_000, 0.001, 0.05)
+        this.bounceFrameAt = now
         this.bounceVelocity += -this.bounceOffset * this.bounce.stiffness * dt
         this.bounceVelocity *= Math.exp(-this.bounce.damping * dt)
         this.bounceOffset += this.bounceVelocity * dt
