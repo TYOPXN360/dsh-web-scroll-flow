@@ -198,13 +198,13 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     // 滚动位置瞬时落到新底部（不依赖 scrollTop 动画，流式时不会震动）。
     expect(scrollMock.get()).toBe(1000)
     expect(controller.following).toBe(false)
-    // 整列先向下压，再平滑回位；状态行反向抵消保持固定。
+    // 整列先向下压，再平滑回位；状态行保持其在列内的原有位置。
     expect(controller.entering).toBe(true)
     stepFrames(64)
     expect(controller.entryShift).toBeGreaterThan(0)
     expect(controller.entryShift).toBeLessThan(28)
     expect(flow.style.transform).not.toBe('')
-    expect(status.style.transform).not.toBe('')
+    expect(status.style.transform).toBe('')
 
     // 动画结束：位移归零，transform 清空。
     stepFrames(400)
@@ -251,7 +251,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(() => controller.dispose()).not.toThrow()
   })
 
-  it('大幅自动滚动动画期间状态行钉在最终位置，不随动画漂移', () => {
+  it('大幅自动滚动动画不单独改写状态行位置', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
     const status = document.createElement('div')
@@ -264,9 +264,7 @@ describe('ScrollFlowController — 自动跟随动画', () => {
 
     stepFrames(64)
     expect(controller.following).toBe(true)
-    // 状态行补偿 = real - target，抵消未走完的滚动位移（负值，向上钉住）。
-    const expected = `translateY(${(scrollMock.get() - 1000).toFixed(2)}px)`
-    expect(status.style.transform).toBe(expected)
+    expect(status.style.transform).toBe('')
     expect(flow.style.transform).toBe('')
 
     stepFrames(300)
@@ -437,18 +435,16 @@ describe('ScrollFlowController — 边缘回弹', () => {
     expect(controller.bounceShift).toBe(0)
   })
 
-  it('回弹时状态行（Deep diving / 待插话消息）保持固定', () => {
+  it('回弹时不单独改写状态行（Deep diving / 待插话消息）的位置', () => {
     const el = makeScroller(1100, 100)
     const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
-    const wrapper = document.createElement('div')
     const status = document.createElement('div')
     status.setAttribute('role', 'status')
     status.textContent = 'Deep diving...'
     const pending = document.createElement('div')
     pending.setAttribute('data-pending-steering', '')
     pending.textContent = '待插话消息'
-    wrapper.append(status)
-    flow.append(wrapper, pending)
+    flow.append(status, pending)
 
     const controller = new ScrollFlowController(el).attach()
     el.dispatchEvent(makeWheel(-100))
@@ -457,17 +453,13 @@ describe('ScrollFlowController — 边缘回弹', () => {
 
     expect(controller.bounceShift).toBeGreaterThan(0)
     expect(flow.style.transform).not.toBe('')
-    // 状态行用反向 transform 抵消列的位移。
-    expect(status.style.transform).toBe(`translateY(${(-controller.bounceShift).toFixed(2)}px)`)
-    expect(pending.style.transform).toBe(`translateY(${(-controller.bounceShift).toFixed(2)}px)`)
+    expect(status.style.transform).toBe('')
+    expect(pending.style.transform).toBe('')
 
-    // 松手回中后所有 transform 清空。
     stepFrames(150)
     stepFrames(1_000)
     expect(controller.bounceShift).toBeCloseTo(0, 1)
     expect(flow.style.transform).toBe('')
-    expect(status.style.transform).toBe('')
-    expect(pending.style.transform).toBe('')
   })
 
   it('可配置灵敏度：同样滚轮输入产生按灵敏度放大的跟手位移', () => {

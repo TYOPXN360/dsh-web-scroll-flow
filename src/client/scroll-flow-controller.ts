@@ -469,17 +469,8 @@ export class ScrollFlowController {
   }
 
   /**
-   * 回弹时保持固定的"现场状态"元素：列尾的 Deep diving（role=status）
-   * 与待插话消息（data-pending-steering）。状态行可能包在消息/状态容器中，
-   * 因此按 flow 内匹配，而不是假定它是直接子元素。
-   */
-  private fixedStatusElements(flow: HTMLElement): HTMLElement[] {
-    return Array.from(flow.querySelectorAll<HTMLElement>('[role="status"], [data-pending-steering]'))
-  }
-
-  /**
-   * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform；
-   * 状态行用反向位移抵消，并在大距离跳转动画期间额外钉在最终位置。
+   * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform。
+   * 内容列内所有元素保持原有相对布局，不单独改写状态行位置。
    */
   private applyFlowTransform(): void {
     const target = this.resolveBounceTarget()
@@ -492,17 +483,6 @@ export class ScrollFlowController {
       : ''
     target.style.transform = transform
     target.style.willChange = transform === '' ? '' : 'transform'
-    const followShift = this.animating
-      ? this.nativeGet() - this.animTarget
-      : 0
-    const counterOffset = -(offset) + followShift
-    const counter = Math.abs(counterOffset) > REST_EPSILON
-      ? `translateY(${counterOffset.toFixed(2)}px)`
-      : ''
-    for (const el of this.fixedStatusElements(target)) {
-      el.style.transform = counter
-      el.style.willChange = counter === '' ? '' : 'transform'
-    }
   }
 
   private resetFlowTransform(): void {
@@ -510,10 +490,6 @@ export class ScrollFlowController {
     if (target === null) return
     target.style.transform = ''
     target.style.willChange = ''
-    for (const el of this.fixedStatusElements(target)) {
-      el.style.transform = ''
-      el.style.willChange = ''
-    }
   }
 
   private ensureFrame(): void {
