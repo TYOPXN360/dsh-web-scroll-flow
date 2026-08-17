@@ -110,6 +110,8 @@ export class TypewriterController {
   private readonly baselineMarkdowns = new Set<HTMLElement>()
   /** 每个 Markdown 的最后可见文本：区分"流式增长"与"我们自己的 overlay mutation"。 */
   private readonly lastSeenByMarkdown = new Map<HTMLElement, string>()
+  /** 已完成消息的全文签名，防止 React 重建同一消息时重新播放。 */
+  private readonly completedTargets = new WeakMap<Element, Map<number, string>>()
   private readonly loadedAt = performance.now()
   private disposed = false
 
@@ -228,6 +230,9 @@ export class TypewriterController {
       this.lastSeenByMarkdown.set(markdown, text)
       // 宽限期内的变化都视为历史加载，不启动。
       if (loading) continue
+      // React may replace the completed Markdown node with an equivalent node;
+      // keep the finished content instead of replaying the typewriter.
+      if (this.completedTextOf(markdown) === text) continue
       // 状态行可能在最后一批 assistant Markdown 到达前先被移除；已有
       // 节点的前缀增长仍是当前流式输出，新历史节点则继续保持静态。
       if (!running && !growth) continue
@@ -263,6 +268,20 @@ export class TypewriterController {
     const container = this.messageContainerOf(el)
     if (container === null) return -1
     return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR)).indexOf(el)
+  }
+
+  private completedTextOf(markdown: HTMLElement): string | undefined {
+    const container = this.messageContainerOf(markdown)
+    if (container === null) return undefined
+    return this.completedTargets.get(container)?.get(this.markdownIndexOf(markdown))
+  }
+
+  private rememberCompleted(session: TypewriterSession): void {
+    const container = this.messageContainerOf(session.markdown)
+    if (container === null) return
+    const entries = this.completedTargets.get(container) ?? new Map<number, string>()
+    entries.set(this.markdownIndexOf(session.markdown), session.targetText)
+    this.completedTargets.set(container, entries)
   }
 
   /** 同一消息内 markdown 节点被替换且文本延续时，迁移打字机 session。 */
@@ -471,6 +490,7 @@ export class TypewriterController {
     session.settleTimer = undefined
     if (session.shownChars < session.targetText.length) session.shownChars = session.targetText.length
     this.renderOverlay(session)
+    this.rememberCompleted(session)
     session.holdTimer = setTimeout(() => { this.teardownSession(session) }, this.options.cursorHold)
   }
 
