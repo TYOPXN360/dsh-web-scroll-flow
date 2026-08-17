@@ -94,9 +94,18 @@ export function installScrollFlow(
     }
   }
   sync()
+  let syncScheduled = false
+  const scheduleSync = (): void => {
+    if (syncScheduled) return
+    syncScheduled = true
+    queueMicrotask(() => {
+      syncScheduled = false
+      sync()
+    })
+  }
   const observer = typeof MutationObserver === 'undefined'
     ? null
-    : new MutationObserver(sync)
+    : new MutationObserver(scheduleSync)
   observer?.observe(root as Node, { childList: true, subtree: true })
   return {
     setOptions(next: ScrollFlowOptions): void {
@@ -127,8 +136,8 @@ export function installScrollFlow(
     dispose(): void {
       observer?.disconnect()
       for (const entry of entries.values()) {
-        entry.controller.dispose()
         entry.typewriter?.dispose()
+        entry.controller.dispose()
       }
       entries.clear()
     },

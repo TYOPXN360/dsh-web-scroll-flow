@@ -224,7 +224,6 @@ export class NativeTypewriterController {
         // 污染 targetText，只同步节点长度并截回当前目标。
         const extension = snapshotText.length > existing.targetText.length
           && snapshotText.startsWith(existing.targetText)
-        console.log('DEBUG existing', JSON.stringify(snapshotText), 'target', JSON.stringify(existing.targetText), 'ext', extension, 'len', snapshotLengths)
         if (extension) {
           existing.targetText = snapshotText
           existing.lastGrowthAt = performance.now()
@@ -414,9 +413,22 @@ export class NativeTypewriterController {
     session.settleTimer = undefined
     session.holdTimer = undefined
     this.options.onRestore?.()
-    // 移除光标；文本已由 applyPrefix 写全（settle 时），或直接恢复完整文本。
+    // dispose / 设置切换可能发生在打字中途；先恢复完整文本，避免截断内容残留。
+    this.restoreText(session)
     session.markdown.querySelector(`.${CURSOR_CLASS}`)?.remove()
     this.sessions.delete(session.markdown)
+  }
+
+  private restoreText(session: TypewriterSession): void {
+    const nodes = collectTextNodes(session.markdown)
+    if (nodes.length !== session.textLengths.length) return
+    let offset = 0
+    for (let i = 0; i < nodes.length; i++) {
+      const length = session.textLengths[i] ?? 0
+      nodes[i]!.data = session.targetText.slice(offset, offset + length)
+      offset += length
+    }
+    this.lastSeenByMarkdown.set(session.markdown, session.targetText)
   }
 
   private ensureStyleTag(): void {

@@ -512,6 +512,20 @@ describe('ScrollFlowController — 生命周期', () => {
     expect(() => controller.attach()).toThrow(/已销毁/)
   })
 
+  it('关闭后重新启用回弹时恢复默认配置', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+
+    controller.setOptions({ bounce: null })
+    el.dispatchEvent(makeWheel(-100))
+    expect(controller.bounceShift).toBe(0)
+
+    controller.setOptions({ bounce: undefined })
+    el.dispatchEvent(makeWheel(-100))
+    expect(controller.bounceShift).toBeGreaterThan(0)
+    controller.dispose()
+  })
+
   it('不支持的选项关闭对应行为', () => {
     const el = makeScroller(1100, 100)
     const controller = new ScrollFlowController(el, { follow: null, bounce: null }).attach()

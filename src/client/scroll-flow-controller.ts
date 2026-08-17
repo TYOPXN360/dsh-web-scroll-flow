@@ -237,8 +237,8 @@ export class ScrollFlowController {
    * @param options - 新配置；未提供的字段保持当前值。
    */
   setOptions(options: ScrollFlowOptions): void {
-    if (options.follow !== undefined) this.follow = options.follow
-    if (options.bounce !== undefined) this.bounce = options.bounce
+    if ('follow' in options) this.follow = options.follow === undefined ? DEFAULT_FOLLOW : options.follow
+    if ('bounce' in options) this.bounce = options.bounce === undefined ? DEFAULT_BOUNCE : options.bounce
     if (this.follow === null) {
       this.cancelAnimation()
       this.cancelEntry()

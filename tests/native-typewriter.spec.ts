@@ -286,7 +286,7 @@ describe('TypewriterController — 原生模式', () => {
     typewriter.dispose()
   })
 
-  it('dispose 清理光标并保持原始文本', async () => {
+  it('dispose 中途恢复完整文本并清理光标', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
     const typewriter = new NativeTypewriterController(flow, {
@@ -296,11 +296,13 @@ describe('TypewriterController — 原生模式', () => {
       cursorHold: 50,
     }).attach()
 
-    await growText(markdown, '测试')
-    expect(cursorOf(markdown)).not.toBeNull()
+    await growText(markdown, '测试文本')
+    clock += 16
+    typewriter.tick(clock)
+    expect(markdown.textContent.length).toBeLessThan(4)
 
     typewriter.dispose()
     expect(cursorOf(markdown)).toBeNull()
-    expect(markdown.textContent.length).toBeLessThanOrEqual(2) // 前缀不超过当前进度
+    expect(markdown.textContent).toBe('测试文本')
   })
 })
