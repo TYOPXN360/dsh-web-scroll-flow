@@ -54,7 +54,7 @@ const CURSOR_STYLE: Partial<CSSStyleDeclaration> = {
   animation: 'dsh-typewriter-blink 1s steps(1) infinite',
 }
 
-const MAX_SPEED_MULTIPLIER = 24
+// const MAX_SPEED_MULTIPLIER = 24
 const BLINK_KEYFRAMES = `
 @keyframes dsh-typewriter-blink {
   50% { opacity: 0; }
@@ -371,7 +371,7 @@ export class TypewriterController {
    */
   private effectiveSpeed(length: number): number {
     if (length <= 400) return this.options.baseSpeed
-    const multiplier = Math.min(MAX_SPEED_MULTIPLIER, 1 + (length - 400) / 250)
+    const multiplier = 1 + (length - 400) / 250
     return this.options.baseSpeed * multiplier
   }
 

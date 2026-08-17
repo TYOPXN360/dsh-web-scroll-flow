@@ -44,7 +44,7 @@ const DEFAULT_OPTIONS: TypewriterOptions = {
 }
 
 const CURSOR_CLASS = `${TYPEWRITER_OVERLAY_CLASS}-cursor`
-const MAX_SPEED_MULTIPLIER = 24
+// const MAX_SPEED_MULTIPLIER = 24
 
 const CURSOR_STYLE: Partial<CSSStyleDeclaration> = {
   display: 'inline-block',
@@ -389,7 +389,7 @@ export class NativeTypewriterController {
    */
   private effectiveSpeed(length: number): number {
     if (length <= 400) return this.options.baseSpeed
-    const multiplier = Math.min(MAX_SPEED_MULTIPLIER, 1 + (length - 400) / 250)
+    const multiplier = 1 + (length - 400) / 250
     return this.options.baseSpeed * multiplier
   }
 
