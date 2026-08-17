@@ -174,12 +174,8 @@ describe('TypewriterController', () => {
       clock += 20
       typewriter.tick(clock)
     }
-    const divs = Array.from(overlay.children).filter((c) => c.tagName === 'DIV')
-    // 至少第一段已渲染；首个 div 以第一段内容开头（第二段在 \n\n 之后）。
-    expect(divs.length).toBeGreaterThanOrEqual(1)
-    const firstDiv = divs[0] as HTMLDivElement
-    expect(firstDiv.textContent ?? '').toContain('第一段内容')
-    expect(firstDiv.style.margin).toContain('0px') // 无 p 结构时默认 gap 0
+    // 克隆的 Markdown 树保留真实节点；无标签的测试 Markdown 仍直接落在根文本节点。
+    expect(overlay.textContent ?? '').toContain('第一段内容')
     typewriter.dispose()
   })
 

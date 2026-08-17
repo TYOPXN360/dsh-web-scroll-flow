@@ -84,11 +84,9 @@ interface TypewriterSession {
   markdownIndex: number
   shell: HTMLElement | null
   overlay: HTMLDivElement | null
-  /** 已复用的段落 div 缓存：打字中只更新文本，不重建 DOM（手机端性能）。 */
-  paragraphEls: HTMLDivElement[]
+  /** React Markdown 文本节点的完整长度，按渲染后的 DOM 顺序对应。 */
+  textLengths: number[]
   targetText: string
-  /** 段落底部间距（px），复制自目标 markdown 的 p，打字与完成一致。 */
-  paragraphGap: number
   shownChars: number
   lastGrowthAt: number
   lastEmitAt: number
@@ -166,6 +164,22 @@ export class TypewriterController {
 
   private markdowns(): HTMLElement[] {
     return Array.from(this.flow.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
+      .filter(markdown => !markdown.classList.contains(TYPEWRITER_OVERLAY_CLASS))
+  }
+
+  private textNodes(root: Node): Text[] {
+    const nodes: Text[] = []
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let node = walker.nextNode()
+    while (node !== null) {
+      nodes.push(node as Text)
+      node = walker.nextNode()
+    }
+    return nodes
+  }
+
+  private textLengths(markdown: HTMLElement): number[] {
+    return this.textNodes(markdown).map(node => node.data.length)
   }
 
   private onFlowChanged(): void {
@@ -194,6 +208,7 @@ export class TypewriterController {
           && text.startsWith(existing.targetText)
         if (extension) {
           existing.targetText = text
+          existing.textLengths = this.textLengths(markdown)
           existing.lastGrowthAt = performance.now()
           this.lastSeenByMarkdown.set(markdown, text)
           if (existing.shownChars >= existing.targetText.length) {
@@ -278,6 +293,7 @@ export class TypewriterController {
     session.markdownIndex = this.markdownIndexOf(next)
     session.shell = newShell
     session.targetText = text
+    session.textLengths = this.textLengths(next)
     session.lastGrowthAt = performance.now()
     if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
     next.style.display = 'none'
@@ -293,8 +309,7 @@ export class TypewriterController {
       markdownIndex: this.markdownIndexOf(markdown),
       shell: markdown.parentElement,
       overlay: null,
-      paragraphEls: [],
-      paragraphGap: 0,
+      textLengths: this.textLengths(markdown),
       targetText: text,
       shownChars: 0,
       lastGrowthAt: performance.now(),
@@ -366,33 +381,12 @@ export class TypewriterController {
     const markdown = session.markdown
     const shell = session.shell
     if (shell === null) return
-    const overlay = document.createElement('div')
-    overlay.className = TYPEWRITER_OVERLAY_CLASS
-    overlay.style.cssText = Object.entries({
-      margin: '0',
-      padding: '0',
-      minHeight: '1em',
-      pointerEvents: 'none',
-      fontSize: 'inherit',
-      lineHeight: 'inherit',
-      color: 'inherit',
-      whiteSpace: 'pre-wrap',
-      overflowWrap: 'anywhere',
-      wordBreak: 'break-word',
-    }).map(([k, v]) => `${k}:${v}`).join(';')
-    const style = getComputedStyle(markdown)
-    for (const prop of INHERITED_TEXT_STYLES) {
-      const value = style[prop]
-      if (typeof value === 'string' && value !== '') {
-        overlay.style.setProperty(String(prop), value)
-      }
-    }
-    // 段落间距：取目标 markdown 第一个段落的 margin-bottom，打字与完成一致。
-    const firstParagraph = markdown.querySelector('p, li, pre, blockquote')
-    if (firstParagraph !== null) {
-      session.paragraphGap = parseFloat(getComputedStyle(firstParagraph).marginBottom) || 0
-    }
-    // 覆盖层放在 markdown 之前，占据已打文本的高度。
+    const overlay = markdown.cloneNode(true) as HTMLDivElement
+    overlay.classList.add(TYPEWRITER_OVERLAY_CLASS)
+    overlay.style.display = 'block'
+    overlay.style.pointerEvents = 'none'
+    overlay.style.userSelect = 'none'
+    // Clone the parsed tree so paragraphs, code, and inline Markdown keep their layout.
     shell.insertBefore(overlay, markdown)
     session.overlay = overlay
     markdown.style.display = 'none'
@@ -405,39 +399,36 @@ export class TypewriterController {
    * DOM（手机端卡顿 / 发热主因）。
    */
   private renderOverlay(session: TypewriterSession): void {
-    const overlay = session.overlay
+    let overlay = session.overlay
     if (overlay === null) return
-    const cursor = overlay.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
+    let nodes = this.textNodes(overlay)
+    if (nodes.length !== session.textLengths.length) {
+      const replacement = session.markdown.cloneNode(true) as HTMLDivElement
+      replacement.classList.add(TYPEWRITER_OVERLAY_CLASS)
+      replacement.style.cssText = overlay.style.cssText
+      overlay.replaceWith(replacement)
+      overlay = replacement
+      session.overlay = overlay
+      nodes = this.textNodes(overlay)
+    }
+    const cursor = overlay.querySelector<HTMLSpanElement>(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
       ?? this.createCursor()
-    if (cursor.parentElement !== null && cursor.parentElement !== overlay) {
-      // 光标先挪到 overlay 根，避免被段落增删时误移除。
+    const prefix = session.targetText.slice(0, session.shownChars)
+    let offset = 0
+    let lastVisible: Text | null = null
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]!
+      const length = session.textLengths[i] ?? 0
+      const take = Math.max(0, Math.min(length, prefix.length - offset))
+      node.data = prefix.slice(offset, offset + take)
+      if (take > 0) lastVisible = node
+      offset += length
+    }
+    if (lastVisible !== null && lastVisible.parentElement !== null) {
+      lastVisible.parentElement.insertBefore(cursor, lastVisible.nextSibling)
+    } else {
       overlay.appendChild(cursor)
     }
-    const prefix = session.targetText.slice(0, session.shownChars)
-    const paragraphs = prefix.split('\n\n').filter(segment => segment !== '' || session.shownChars === 0)
-    const els = session.paragraphEls
-    // 复用 / 补齐段落节点。
-    paragraphs.forEach((paragraph, index) => {
-      if (paragraph === '') return
-      let p = els[index]
-      if (p === undefined || p.parentElement !== overlay) {
-        p = document.createElement('div')
-        els[index] = p
-        overlay.appendChild(p)
-      }
-      p.textContent = paragraph
-      p.style.margin = index < paragraphs.length - 1 ? `0 0 ${session.paragraphGap}px` : ''
-    })
-    // 移除多余段落。
-    for (let i = paragraphs.length; i < els.length; i++) {
-      const extra = els[i]
-      if (extra !== undefined) extra.remove()
-    }
-    els.length = paragraphs.length
-    // 光标紧跟正在输入的字符：放在最后一段（若存在）末尾，否则覆盖层根。
-    const lastParagraph = els.length > 0 ? els[els.length - 1] ?? null : null
-    const anchor = lastParagraph === null ? overlay : lastParagraph
-    if (cursor.parentElement !== anchor) anchor.appendChild(cursor)
   }
 
   private createCursor(): HTMLSpanElement {
@@ -469,7 +460,6 @@ export class TypewriterController {
       session.overlay.remove()
       session.overlay = null
     }
-    session.paragraphEls = []
     this.sessions.delete(session.markdown)
   }
 
