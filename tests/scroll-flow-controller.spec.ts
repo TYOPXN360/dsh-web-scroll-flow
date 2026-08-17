@@ -71,7 +71,15 @@ function makeWheel(deltaY: number, prevented = false): WheelEvent {
   return event
 }
 
-/** matchMedia 的桩：可动态切换 matches 并触发 change 监听。 */
+function makeTouch(type: 'touchstart' | 'touchmove' | 'touchend', clientY?: number): TouchEvent {
+  const event = new Event(type, { cancelable: true, bubbles: true }) as TouchEvent
+  Object.defineProperty(event, 'touches', {
+    configurable: true,
+    value: clientY === undefined ? [] : [{ clientY }],
+  })
+  return event
+}
+
 function mockMatchMedia(matches = false): {
   setMatches(next: boolean): void
 } {
@@ -387,6 +395,22 @@ describe('ScrollFlowController — 边缘回弹', () => {
     expect(event.defaultPrevented).toBe(true)
     stepFrames(16)
     expect(controller.bounceShift).toBeLessThan(0)
+  })
+
+  it('移动端触摸在顶部继续下拉时触发回弹并在抬手后释放', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+
+    el.dispatchEvent(makeTouch('touchstart', 100))
+    const move = makeTouch('touchmove', 150)
+    expect(el.dispatchEvent(move)).toBe(false)
+    expect(move.defaultPrevented).toBe(true)
+    expect(controller.bounceShift).toBeGreaterThan(0)
+
+    el.dispatchEvent(makeTouch('touchend'))
+    stepFrames(2_000)
+    expect(controller.bounceShift).toBeCloseTo(0, 1)
+    controller.dispose()
   })
 
   it('可滚动方向的滚轮只释放拉伸，不产生回弹', () => {

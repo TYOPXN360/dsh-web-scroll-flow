@@ -131,6 +131,7 @@ export class ScrollFlowController {
   private releasing = false
   private lastWheelAt = 0
   private bounceFrameAt = 0
+  private touchY: number | null = null
   private bounceTarget: HTMLElement | null = null
   /** flow 高度监视：检测内容收回（高度减小）时清位移，避免与浏览器 clamp 叠加成"撞墙回弹"。 */
   private flowObserver: ResizeObserver | null = null
@@ -140,35 +141,31 @@ export class ScrollFlowController {
   private disposed = false
   private reducedMotion = false
 
-  /** 滚轮：用户手动滚动 → 打断动画；边缘继续向外滚时跟手拉动（无上限），
-   *  滚轮停止 releaseDelay 后松手释放弹簧回中。 */
+  /** 滚轮：用户手动滚动 → 打断动画；边缘继续向外滚时跟手拉动。 */
   private readonly onWheel = (event: WheelEvent): void => {
     this.cancelAnimation()
     this.cancelEntry()
+    this.applyEdgePull(event.deltaY, event)
+  }
+
+  private applyEdgePull(deltaY: number, event: Event): void {
     if (this.bounce === null || this.disposed || this.reducedMotion
-      || event.defaultPrevented || event.deltaY === 0) return
-    // 事件来自容器内部的滚动元素（消息详情、代码块等）时保持原生滚动，
-    // 不触发页面级回弹。
-    if (this.eventConsumedByChildScroll(event)) return
-    // 容器内无回弹目标（如 trajectory 视图）时忽略。
+      || event.defaultPrevented || deltaY === 0) return
+    if (this.eventConsumedByChildScroll(event, deltaY)) return
     if (this.resolveBounceTarget() === null) return
     const real = this.nativeGet()
     const floor = Math.max(0, this.element.scrollHeight - this.element.clientHeight)
     const atTop = real <= 0
     const atBottom = floor - real <= 1
-    const pushingOut = (event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)
+    const pushingOut = (deltaY < 0 && atTop) || (deltaY > 0 && atBottom)
     if (!pushingOut) {
-      // 正常滚动方向：立即进入释放，让残留的橡皮筋平滑回中。
       this.beginRelease()
       return
     }
-    // 边缘越界时阻止滚动链继续滚动外层页面；正常滚动仍保持原生行为。
     if (event.cancelable) event.preventDefault()
     this.lastWheelAt = performance.now()
-    // 顶边缘：内容向下拉（+y）；底边缘：内容向上拉（-y）。
-    const direction = event.deltaY < 0 ? 1 : -1
-    // 跟手累积：软增益递减，无硬上限（一直滚就一直拉）。
-    const unit = Math.abs(event.deltaY) / this.bounce.sensitivity * this.bounce.amplitude
+    const direction = deltaY < 0 ? 1 : -1
+    const unit = Math.abs(deltaY) / this.bounce.sensitivity * this.bounce.amplitude
     const gain = 1 / (1 + Math.abs(this.bounceOffset) / Math.max(1, this.bounce.amplitude))
     this.bounceOffset += direction * unit * gain
     this.bounceVelocity = 0
@@ -178,7 +175,7 @@ export class ScrollFlowController {
   }
 
   /** 目标与容器之间是否存在能在滚动方向上继续滚动的子滚动元素。 */
-  private eventConsumedByChildScroll(event: WheelEvent): boolean {
+  private eventConsumedByChildScroll(event: Event, deltaY: number): boolean {
     const target = event.target instanceof Element ? event.target : null
     if (target === null || !this.element.contains(target)) return false
     let el: Element | null = target
@@ -186,9 +183,9 @@ export class ScrollFlowController {
       if (el.scrollHeight > el.clientHeight) {
         const style = getComputedStyle(el)
         if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-          if (event.deltaY < 0 && el.scrollTop > 0) return true
+          if (deltaY < 0 && el.scrollTop > 0) return true
           const floor = el.scrollHeight - el.clientHeight
-          if (event.deltaY > 0 && el.scrollTop < floor - 1) return true
+          if (deltaY > 0 && el.scrollTop < floor - 1) return true
         }
       }
       el = el.parentElement
@@ -196,10 +193,27 @@ export class ScrollFlowController {
     return false
   }
 
-  /** 触摸开始：用户接管滚动，打断动画并清掉残留拉伸。 */
-  private readonly onTouchStart = (): void => {
+  /** 触摸开始：记录手指位置，后续只在边缘越界时接管。 */
+  private readonly onTouchStart = (event: TouchEvent): void => {
     this.cancelAll()
+    this.touchY = event.touches[0]?.clientY ?? null
   }
+
+  private readonly onTouchMove = (event: TouchEvent): void => {
+    const currentY = event.touches[0]?.clientY
+    if (this.touchY === null || currentY === undefined) return
+    const deltaY = this.touchY - currentY
+    this.touchY = currentY
+    this.cancelAnimation()
+    this.cancelEntry()
+    this.applyEdgePull(deltaY, event)
+  }
+
+  private readonly onTouchEnd = (): void => {
+    this.touchY = null
+    this.beginRelease()
+  }
+
 
   /** 点击：非滚动交互（展开消息等），清掉残留位移避免重排时误显。 */
   private readonly onClick = (): void => {
@@ -271,6 +285,9 @@ export class ScrollFlowController {
     })
     this.element.addEventListener('wheel', this.onWheel, { capture: true, passive: false })
     this.element.addEventListener('touchstart', this.onTouchStart, { capture: true, passive: true })
+    this.element.addEventListener('touchmove', this.onTouchMove, { capture: true, passive: false })
+    this.element.addEventListener('touchend', this.onTouchEnd, { capture: true, passive: true })
+    this.element.addEventListener('touchcancel', this.onTouchEnd, { capture: true, passive: true })
     this.element.addEventListener('mousedown', this.onPointerDown, { capture: true, passive: true })
     this.element.addEventListener('keydown', this.onKeyDown, { capture: true, passive: true })
     this.element.addEventListener('click', this.onClick, { capture: true, passive: true })
@@ -312,6 +329,9 @@ export class ScrollFlowController {
     delete (this.element as unknown as Record<string, unknown>).scrollTop
     this.element.removeEventListener('wheel', this.onWheel, { capture: true })
     this.element.removeEventListener('touchstart', this.onTouchStart, { capture: true })
+    this.element.removeEventListener('touchmove', this.onTouchMove, { capture: true })
+    this.element.removeEventListener('touchend', this.onTouchEnd, { capture: true })
+    this.element.removeEventListener('touchcancel', this.onTouchEnd, { capture: true })
     this.element.removeEventListener('mousedown', this.onPointerDown, { capture: true })
     this.element.removeEventListener('keydown', this.onKeyDown, { capture: true })
     this.element.removeEventListener('click', this.onClick, { capture: true })
