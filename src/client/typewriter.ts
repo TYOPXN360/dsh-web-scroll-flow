@@ -199,6 +199,12 @@ export class TypewriterController {
           if (existing.shownChars >= existing.targetText.length) {
             existing.shownChars = Math.max(0, existing.targetText.length - 1)
           }
+        } else {
+          // A persistent non-prefix rewrite belongs to React/Markdown, not the
+          // old typewriter target. Restore the real Markdown immediately.
+          this.teardownSession(existing)
+          this.lastSeenByMarkdown.set(markdown, text)
+          continue
         }
         this.ensureStreaming(existing)
         continue

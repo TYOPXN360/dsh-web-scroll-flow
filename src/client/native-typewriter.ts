@@ -238,10 +238,10 @@ export class NativeTypewriterController {
           // React may rebuild the same text with a new Markdown node structure.
           existing.textLengths = snapshotLengths
         } else {
-          // Ignore transient shorter / non-prefix commits; the next complete
-          // commit will provide a trustworthy text-node snapshot.
-          this.applyPrefix(existing)
-          this.ensureStreaming(existing)
+          // A persistent Markdown rewrite can be non-prefix (for example when
+          // a block is normalized). Stop native truncation rather than keeping
+          // an obsolete target that can permanently hide the new text.
+          this.abandonSession(existing, snapshotText)
           continue
         }
         this.applyPrefix(existing)
@@ -423,6 +423,17 @@ export class NativeTypewriterController {
     if (session.shownChars < session.targetText.length) session.shownChars = session.targetText.length
     this.applyPrefix(session)
     session.holdTimer = setTimeout(() => { this.teardownSession(session) }, this.options.cursorHold)
+  }
+
+  private abandonSession(session: TypewriterSession, currentText: string): void {
+    clearTimeout(session.settleTimer)
+    clearTimeout(session.holdTimer)
+    session.settleTimer = undefined
+    session.holdTimer = undefined
+    this.options.onRestore?.()
+    session.markdown.querySelector(`.${CURSOR_CLASS}`)?.remove()
+    this.sessions.delete(session.markdown)
+    this.lastSeenByMarkdown.set(session.markdown, currentText)
   }
 
   private teardownSession(session: TypewriterSession): void {

@@ -111,7 +111,7 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
-  it('忽略 React 中间态的短文本提交，避免目标被截短', async () => {
+  it('遇到非前缀 Markdown 重建时停止覆盖并显示 React 文本', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
     const typewriter = new TypewriterController(flow, {
@@ -124,13 +124,12 @@ describe('TypewriterController', () => {
     await growText(markdown, '完整目标文本')
     expect(typewriter.targetLength).toBe(6)
 
-    markdown.textContent = '完整'
+    markdown.textContent = '改写后的文本'
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(typewriter.targetLength).toBe(6)
-
-    markdown.textContent = '完整目标文本'
-    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(typewriter.targetLength).toBe(6)
+    expect(typewriter.active).toBe(false)
+    expect(typewriter.targetLength).toBe(0)
+    expect(markdown.textContent).toBe('改写后的文本')
+    expect(markdown.style.display).toBe('')
     typewriter.dispose()
   })
   it('大文本按要求公式提速（13 000 字远快于短文本）', async () => {
