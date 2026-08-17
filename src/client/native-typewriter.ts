@@ -82,6 +82,8 @@ interface TypewriterSession {
   markdown: HTMLElement
   /** session 所属消息容器（flow 直接子容器）；节点被替换后仍可定位迁移。 */
   messageContainer: Element | null
+  /** session 所属消息内的 Markdown 顺序，避免思维链与正文互相迁移。 */
+  markdownIndex: number
   targetText: string
   /** 当前 Markdown 结构下各文本节点的原始长度（React 全量写入时缓存）。 */
   textLengths: number[]
@@ -280,12 +282,20 @@ export class NativeTypewriterController {
       ?? null
   }
 
+  private markdownIndexOf(el: HTMLElement): number {
+    const container = this.messageContainerOf(el)
+    if (container === null) return -1
+    return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR)).indexOf(el)
+  }
+
   /** 同一消息内 markdown 节点被替换且文本延续时，迁移打字机 session。 */
   private tryMigrateSession(next: HTMLElement, text: string): boolean {
     const nextContainer = this.messageContainerOf(next)
+    const nextIndex = this.markdownIndexOf(next)
     for (const [oldMarkdown, session] of this.sessions) {
       if (oldMarkdown === next) continue
       if (session.messageContainer === null || session.messageContainer !== nextContainer) continue
+      if (session.markdownIndex !== nextIndex) continue
       if (!text.startsWith(session.targetText)) continue
       this.migrateSession(session, next, text)
       return true
@@ -297,6 +307,7 @@ export class NativeTypewriterController {
     this.sessions.delete(session.markdown)
     session.markdown = next
     session.messageContainer = this.messageContainerOf(next)
+    session.markdownIndex = this.markdownIndexOf(next)
     session.targetText = text
     session.textLengths = collectTextNodes(next).map(node => node.data?.length ?? 0)
     session.lastGrowthAt = performance.now()
@@ -310,6 +321,7 @@ export class NativeTypewriterController {
     const session: TypewriterSession = {
       markdown,
       messageContainer: this.messageContainerOf(markdown),
+      markdownIndex: this.markdownIndexOf(markdown),
       targetText: text,
       textLengths: collectTextNodes(markdown).map(node => node.data?.length ?? 0),
       shownChars: 0,
@@ -373,12 +385,8 @@ export class NativeTypewriterController {
     const shown = session.shownChars
     const lengths = session.textLengths
     const nodes = collectTextNodes(markdown)
-    // 结构变化未稳定（React 分批提交中）：跳过本次截断，避免丢字；
-    // 下一帧 flush 会按新结构重新同步。
-    if (nodes.length !== lengths.length) {
-      this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
-      return
-    }
+    // 结构变化未稳定时保留上一次可信快照；下一次 React 完整提交会重新同步。
+    if (nodes.length !== lengths.length) return
     let offset = 0
     let lastTextNode: Text | null = null
     for (let i = 0; i < nodes.length && i < lengths.length; i++) {
@@ -431,7 +439,12 @@ export class NativeTypewriterController {
 
   private restoreText(session: TypewriterSession): void {
     const nodes = collectTextNodes(session.markdown)
-    if (nodes.length !== session.textLengths.length) return
+    if (nodes.length !== session.textLengths.length) {
+      // 结构已被 React 替换时，优先保证完整文本可见，不静默留下截断内容。
+      session.markdown.textContent = session.targetText
+      this.lastSeenByMarkdown.set(session.markdown, session.targetText)
+      return
+    }
     let offset = 0
     for (let i = 0; i < nodes.length; i++) {
       const length = session.textLengths[i] ?? 0

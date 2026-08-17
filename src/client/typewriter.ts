@@ -80,6 +80,8 @@ interface TypewriterSession {
   markdown: HTMLElement
   /** session 所属消息容器（flow 直接子容器）；节点被替换后仍可定位迁移。 */
   messageContainer: Element | null
+  /** session 所属消息内的 Markdown 顺序，避免思维链与正文互相迁移。 */
+  markdownIndex: number
   shell: HTMLElement | null
   overlay: HTMLDivElement | null
   /** 已复用的段落 div 缓存：打字中只更新文本，不重建 DOM（手机端性能）。 */
@@ -234,12 +236,20 @@ export class TypewriterController {
       ?? null
   }
 
+  private markdownIndexOf(el: HTMLElement): number {
+    const container = this.messageContainerOf(el)
+    if (container === null) return -1
+    return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR)).indexOf(el)
+  }
+
   /** 同一消息内 markdown 节点被替换且文本延续时，迁移打字机 session。 */
   private tryMigrateSession(next: HTMLElement, text: string): boolean {
     const nextContainer = this.messageContainerOf(next)
+    const nextIndex = this.markdownIndexOf(next)
     for (const [oldMarkdown, session] of this.sessions) {
       if (oldMarkdown === next) continue
       if (session.messageContainer === null || session.messageContainer !== nextContainer) continue
+      if (session.markdownIndex !== nextIndex) continue
       if (!text.startsWith(session.targetText)) continue
       this.migrateSession(session, next, text)
       return true
@@ -259,6 +269,7 @@ export class TypewriterController {
     this.sessions.delete(oldMarkdown)
     session.markdown = next
     session.messageContainer = this.messageContainerOf(next)
+    session.markdownIndex = this.markdownIndexOf(next)
     session.shell = newShell
     session.targetText = text
     session.lastGrowthAt = performance.now()
@@ -273,6 +284,7 @@ export class TypewriterController {
     const session: TypewriterSession = {
       markdown,
       messageContainer: this.messageContainerOf(markdown),
+      markdownIndex: this.markdownIndexOf(markdown),
       shell: markdown.parentElement,
       overlay: null,
       paragraphEls: [],
