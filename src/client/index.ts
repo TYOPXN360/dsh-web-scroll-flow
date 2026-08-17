@@ -52,9 +52,10 @@ function createTypewriter(
 ): TypewriterLike {
   const flow = element.querySelector<HTMLElement>('[data-chat-flow]') ?? element
   const onRestore = (): void => { controller.suppressEntryFor(600) }
-  // Both settings use the non-destructive renderer in production. The former
-  // native path rewrote React Markdown text nodes and could lose text when the
-  // Markdown parser rebuilt inline nodes during a large streamed update.
+  // Native mode leaves DSH's streaming Markdown renderer in control. Rewriting
+  // React text nodes caused full-text flashes and lost inline Markdown during
+  // large updates; the source stream already provides the desired typing effect.
+  if (_mode === 'native') return { dispose: (): void => {} }
   return new TypewriterController(flow, { onRestore }).attach()
 }
 

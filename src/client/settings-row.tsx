@@ -120,7 +120,7 @@ export function ScrollFlowSettingsRow({
     createElement('div', { style: rowStyle },
       createElement('div', { style: textStyle },
         createElement('div', { style: titleStyle }, '打字机模式'),
-        createElement('div', { style: descStyle }, '原生：直接截断原始 Markdown；覆盖层：叠加模拟层'),
+        createElement('div', { style: descStyle }, '原生：保留实时 Markdown 渲染；覆盖层：叠加模拟层'),
       ),
       createElement('select', {
         value: typewriterMode,
