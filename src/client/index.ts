@@ -14,7 +14,6 @@ import {
   type ScrollFlowSettings, type TypewriterMode,
 } from './scroll-flow-settings.ts'
 import { ScrollFlowSettingsRow, type ScrollFlowSettingsRowInjected } from './settings-row.tsx'
-import { ThinkingMarquee } from './thinking-marquee.ts'
 
 export const name = 'dsh-web-scroll-flow'
 
@@ -171,8 +170,15 @@ export function apply(ctx: Context): void {
       policy.typewriterEnabled.getSnapshot(),
       policy.typewriterMode.getSnapshot(),
     )
-    // 思考块摘要文字滚动动画
-    const marquee = new ThinkingMarquee(document).attach()
+    // 正在思考的摘要文字：新文字到达时平滑推移，不是瞬移。
+    const style = document.createElement('style')
+    style.id = 'dsh-think-scroll-smooth'
+    style.textContent = [
+      '[data-variant="think"][data-state="running"] [class*="summary"]{',
+      'transition:transform .3s ease-out;',
+      'will-change:transform}',
+    ].join('')
+    document.head.appendChild(style)
     const disposeFollow = policy.followMode.subscribe(() => {
       install.setOptions({ follow: followOptionsForMode(policy.followMode.getSnapshot()) })
       // 档位关闭时也关掉打字机；重新开启时无法在已挂载的安装上补装，
@@ -193,7 +199,7 @@ export function apply(ctx: Context): void {
       disposeBounce()
       disposeTypewriter()
       disposeTypewriterMode()
-      marquee.dispose()
+      style.remove()
       install.dispose()
     }
   })
