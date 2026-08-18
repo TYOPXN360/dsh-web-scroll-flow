@@ -146,7 +146,7 @@ export class TypewriterController {
     this.ensureStyleTag()
     for (const markdown of this.markdowns()) {
       this.baselineMarkdowns.add(markdown)
-      this.lastSeenByMarkdown.set(markdown, markdown.textContent ?? '')
+      this.lastSeenByMarkdown.set(markdown, this.contentText(markdown))
     }
     this.observer = new MutationObserver(() => { this.onFlowChanged() })
     this.observer.observe(this.flow, { childList: true, subtree: true, characterData: true })
@@ -177,10 +177,19 @@ export class TypewriterController {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
     let node = walker.nextNode()
     while (node !== null) {
-      nodes.push(node as Text)
+      const text = node as Text
+      if (text.parentElement?.closest(
+        'button,[data-copy],[aria-label*="copy" i],[aria-label*="复制"],[data-testid*="copy" i],[class*="copy" i]',
+      ) === null) {
+        nodes.push(text)
+      }
       node = walker.nextNode()
     }
     return nodes
+  }
+
+  private contentText(markdown: HTMLElement): string {
+    return this.textNodes(markdown).map(node => node.data).join('')
   }
 
   private textLengths(markdown: HTMLElement): number[] {
@@ -196,7 +205,7 @@ export class TypewriterController {
     // 加载没有运行状态，即使有文本变化也绝不启动打字机。
     const running = this.hasRunningTurn()
     for (const markdown of markdowns) {
-      const text = markdown.textContent ?? ''
+      const text = this.contentText(markdown)
       const isNewNode = !this.baselineMarkdowns.has(markdown)
       const lastSeen = this.lastSeenByMarkdown.get(markdown)
       if (text === lastSeen) continue
@@ -403,11 +412,18 @@ export class TypewriterController {
    * 覆盖层作为正常流元素占据已打文本高度：目标 markdown 打字期间
    * display:none（不占高、不预留整段空白），覆盖层继承其字体输入逐字。
    */
+  private stripInteractiveControls(root: HTMLElement): void {
+    root.querySelectorAll(
+      'button,[data-copy],[aria-label*="copy" i],[aria-label*="复制"],[data-testid*="copy" i],[class*="copy" i]',
+    ).forEach(control => control.remove())
+  }
+
   private installOverlay(session: TypewriterSession): void {
     const markdown = session.markdown
     const shell = session.shell
     if (shell === null) return
     const overlay = markdown.cloneNode(true) as HTMLDivElement
+    this.stripInteractiveControls(overlay)
     overlay.classList.add(TYPEWRITER_OVERLAY_CLASS)
     overlay.style.display = 'none'
     overlay.style.pointerEvents = 'none'
@@ -431,6 +447,7 @@ export class TypewriterController {
     let nodes = this.textNodes(overlay)
     if (nodes.length !== session.textLengths.length) {
       const replacement = session.markdown.cloneNode(true) as HTMLDivElement
+      this.stripInteractiveControls(replacement)
       replacement.classList.add(TYPEWRITER_OVERLAY_CLASS)
       replacement.style.cssText = overlay.style.cssText
       overlay.replaceWith(replacement)
