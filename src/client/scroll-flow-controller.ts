@@ -357,6 +357,7 @@ export class ScrollFlowController {
   /** 在指定时长内抑制贴底入场推升（打字机恢复布局等非流式高度突变）。 */
   suppressEntryFor(durationMs: number): void {
     this.suppressEntryUntil = performance.now() + durationMs
+    this.cancelEntry()
   }
 
   /** 当前回弹位移（px）。 */

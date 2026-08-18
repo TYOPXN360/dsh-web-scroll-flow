@@ -34,6 +34,8 @@ export interface TypewriterOptions {
    * 让同一滚动容器的控制器抑制"入场回弹"。
    */
   onRestore?: () => void
+  /** Called when a live Markdown chunk starts or grows. */
+  onContentChange?: () => void
 }
 
 const DEFAULT_OPTIONS: TypewriterOptions = {
@@ -213,6 +215,7 @@ export class TypewriterController {
           existing.targetText = text
           existing.textLengths = this.textLengths(markdown)
           existing.lastGrowthAt = performance.now()
+          this.options.onContentChange?.()
           this.lastSeenByMarkdown.set(markdown, text)
           if (existing.shownChars >= existing.targetText.length) {
             existing.shownChars = Math.max(0, existing.targetText.length - 1)
@@ -316,6 +319,7 @@ export class TypewriterController {
     session.targetText = text
     session.textLengths = this.textLengths(next)
     session.lastGrowthAt = performance.now()
+    this.options.onContentChange?.()
     if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
     next.style.display = 'none'
     this.sessions.set(next, session)
@@ -339,6 +343,7 @@ export class TypewriterController {
       holdTimer: undefined,
     }
     this.sessions.set(markdown, session)
+    this.options.onContentChange?.()
     this.installOverlay(session)
     this.ensureStreaming(session)
   }

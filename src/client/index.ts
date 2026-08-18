@@ -52,11 +52,13 @@ function createTypewriter(
 ): TypewriterLike {
   const flow = element.querySelector<HTMLElement>('[data-chat-flow]') ?? element
   const onRestore = (): void => { controller.suppressEntryFor(600) }
+  // Keep scroll entry-push from competing with per-chunk Markdown reflow.
+  const onContentChange = (): void => { controller.suppressEntryFor(1_000) }
   // Both modes use the parsed, non-destructive renderer. It clones React's
   // Markdown tree and progressively reveals clone text nodes without touching
   // the source DOM, preserving formatting while avoiding full-text flashes.
   void _mode
-  return new TypewriterController(flow, { onRestore }).attach()
+  return new TypewriterController(flow, { onRestore, onContentChange }).attach()
 }
 
 /**
