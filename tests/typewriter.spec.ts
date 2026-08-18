@@ -37,6 +37,16 @@ async function growText(markdown: HTMLElement, text: string): Promise<void> {
   await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
 }
 
+/** React 替换为新的 markdown 节点（同消息同位置），等待 observer 落地。 */
+async function replaceNode(oldNode: HTMLElement, text: string): Promise<HTMLElement> {
+  const next = document.createElement('div')
+  next.className = oldNode.className
+  next.textContent = text
+  oldNode.replaceWith(next)
+  await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+  return next
+}
+
 beforeEach(() => {
   clock = 10_000
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
@@ -112,7 +122,7 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
-  it('遇到非前缀 Markdown 重建时停止覆盖并显示 React 文本', async () => {
+  it('遇到非前缀 Markdown 重建时保留打字机（暂态快照不重启）', async () => {
     const { flow, markdowns } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!
     const typewriter = new TypewriterController(flow, {
@@ -125,12 +135,12 @@ describe('TypewriterController', () => {
     await growText(markdown, '完整目标文本')
     expect(typewriter.targetLength).toBe(6)
 
+    // 非前缀改写视为流式暂态快照：打字机保留，目标不缩水。
     markdown.textContent = '改写后的文本'
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(typewriter.active).toBe(false)
-    expect(typewriter.targetLength).toBe(0)
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.targetLength).toBe(6)
     expect(markdown.textContent).toBe('改写后的文本')
-    expect(markdown.style.display).toBe('')
     typewriter.dispose()
   })
   it('大文本按要求公式提速（13 000 字远快于短文本）', async () => {
@@ -314,6 +324,39 @@ describe('TypewriterController', () => {
     expect(overlay).not.toBeNull()
     expect(overlay!.parentElement).toBe(inner)
     expect(overlay!.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)).not.toBeNull()
+    typewriter.dispose()
+  })
+
+  it('流式分段：节点被替换成较短的暂态快照时不重启打字机', async () => {
+    const { flow, markdowns, shells } = makeMarkdownFlow([''])
+    const shell = shells[0]!
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    const first = markdowns[0]!
+    await growText(first, '这是一段很长的流式输出内容')
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.targetLength).toBe('这是一段很长的流式输出内容'.length)
+
+    // 打字进行中，解析器把节点重建为较短的暂态快照。
+    clock += 400
+    typewriter.tick(clock)
+    const progressed = typewriter.shown
+    const shorter = await replaceNode(first, '这是一段很')
+    expect(shorter).not.toBeNull()
+    // 仍是同一个打字机（未重启到 0）。
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.shown).toBeGreaterThanOrEqual(progressed)
+
+    // 恢复后继续往前增长：目标文本被刷新为完整文本，不至于瞬间完成。
+    clock += 100
+    await replaceNode(shorter, '这是一段很长的流式输出内容，继续往后追加')
+    expect(typewriter.targetLength).toBe('这是一段很长的流式输出内容，继续往后追加'.length)
+    expect(typewriter.shown).toBeLessThan(typewriter.targetLength)
     typewriter.dispose()
   })
 

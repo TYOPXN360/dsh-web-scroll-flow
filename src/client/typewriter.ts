@@ -230,10 +230,9 @@ export class TypewriterController {
             existing.shownChars = Math.max(0, existing.targetText.length - 1)
           }
         } else {
-          // A persistent non-prefix rewrite belongs to React/Markdown, not the
-          // old typewriter target. Restore the real Markdown immediately.
-          this.teardownSession(existing)
-          this.lastSeenByMarkdown.set(markdown, text)
+          // Markdown parsers may briefly expose a shorter or structurally
+          // rebuilt snapshot between stream chunks. Keep the active session;
+          // destroying it here causes the next chunk to replay from zero.
           continue
         }
         this.ensureStreaming(existing)
@@ -279,7 +278,9 @@ export class TypewriterController {
   private markdownIndexOf(el: HTMLElement): number {
     const container = this.messageContainerOf(el)
     if (container === null) return -1
-    return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR)).indexOf(el)
+    return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
+      .filter(markdown => !markdown.classList.contains(TYPEWRITER_OVERLAY_CLASS))
+      .indexOf(el)
   }
 
   private completedTextOf(markdown: HTMLElement): string | undefined {
@@ -296,7 +297,7 @@ export class TypewriterController {
     this.completedTargets.set(container, entries)
   }
 
-  /** 同一消息内 markdown 节点被替换且文本延续时，迁移打字机 session。 */
+  /** 同一消息内 markdown 节点被替换时迁移打字机 session（流式分段）。 */
   private tryMigrateSession(next: HTMLElement, text: string): boolean {
     const nextContainer = this.messageContainerOf(next)
     const nextIndex = this.markdownIndexOf(next)
@@ -304,7 +305,11 @@ export class TypewriterController {
       if (oldMarkdown === next) continue
       if (session.messageContainer === null || session.messageContainer !== nextContainer) continue
       if (session.markdownIndex !== nextIndex) continue
-      if (!text.startsWith(session.targetText)) continue
+      if (text.length === 0) continue
+      // Streaming deliveries can momentarily rebuild to a shorter snapshot;
+      // both a growing prefix and a shorter continuation belong to the same
+      // logical block, so keep typing rather than restarting from zero.
+      if (!text.startsWith(session.targetText) && !session.targetText.startsWith(text)) continue
       this.migrateSession(session, next, text)
       return true
     }
@@ -325,11 +330,16 @@ export class TypewriterController {
     session.messageContainer = this.messageContainerOf(next)
     session.markdownIndex = this.markdownIndexOf(next)
     session.shell = newShell
-    session.targetText = text
+    // Only grow the target on a real extension; transient shorter snapshots
+    // keep the already-streamed target and progress, so nothing truncates or
+    // appears to instant-finish.
+    if (text.length > session.targetText.length && text.startsWith(session.targetText)) {
+      session.targetText = text
+      if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
+    }
     session.textLengths = this.textLengths(next)
     session.lastGrowthAt = performance.now()
     this.options.onContentChange?.()
-    if (session.shownChars >= text.length) session.shownChars = Math.max(0, text.length - 1)
     next.style.display = 'none'
     this.sessions.set(next, session)
     this.renderOverlay(session)
