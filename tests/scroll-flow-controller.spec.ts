@@ -160,6 +160,27 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     expect(controller.following).toBe(false)
   })
 
+  it('平滑动画进行中的小距离写入不切换到入场推升（收尾不瞬间跳变）', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+
+    el.scrollTop = 1100
+    stepFrames(160) // 动画中（200ms 动画已过 160ms，real ≈ 992，接近底部）
+    expect(controller.following).toBe(true)
+    expect(scrollMock.get()).toBeGreaterThan(900)
+
+    // 此时 distance ≈ 8 ≤ 48 → 贴底小距离写入。修复前会 cancelAnimation
+    // 切到入场推升（following 变 false + entering true）；修复后保持动画。
+    el.scrollTop = 1100
+    expect(controller.following).toBe(true)
+    expect(controller.entering).toBe(false)
+
+    stepFrames(100)
+    expect(scrollMock.get()).toBe(1000)
+    expect(controller.following).toBe(false)
+    expect(controller.entering).toBe(false) // 平滑完成，无入场推升
+  })
+
   it('跟随目标变化（内容继续增长）时平滑重定向到新 floor', () => {
     const el = makeScroller(1100, 100)
     const controller = new ScrollFlowController(el).attach()
@@ -173,6 +194,49 @@ describe('ScrollFlowController — 自动跟随动画', () => {
     stepFrames(400)
     expect(scrollMock.get()).toBe(1500)
     expect(controller.following).toBe(false)
+  })
+
+  it('smoothFollowFor 期间小距离贴底跟随也走平滑动画（每行写完平滑上推）', () => {
+    const el = makeScroller(1100, 100) // floor = 1000，贴底
+    const controller = new ScrollFlowController(el).attach()
+    // 初始贴底。
+    el.scrollTop = 1100
+    stepFrames(300)
+    expect(scrollMock.get()).toBe(1000)
+
+    // 打字机活动期：小距离增长（一行 ≈ 30px）也走平滑滚动，而不是瞬时跳。
+    controller.smoothFollowFor(1_000)
+    setScrollHeight(el, 1130, 100) // 新 floor = 1030，distance = 30
+    el.scrollTop = 1130
+
+    // 平滑动画进行中：真实位置尚未到达新底部（动画中）。
+    stepFrames(30)
+    expect(scrollMock.get()).toBeLessThan(1030)
+    expect(scrollMock.get()).toBeGreaterThan(1000)
+    expect(controller.following).toBe(true)
+
+    // 完成：到达新底部。
+    stepFrames(300)
+    expect(scrollMock.get()).toBe(1030)
+    expect(controller.following).toBe(false)
+  })
+
+  it('smoothFollowFor 过期后小距离跟随恢复瞬时 + 入场推升', () => {
+    const el = makeScroller(1100, 100)
+    const controller = new ScrollFlowController(el).attach()
+    el.scrollTop = 1100
+    stepFrames(300)
+    expect(scrollMock.get()).toBe(1000)
+
+    // 过期后：小距离增长瞬时落底 + 入场推升（无平滑动画）。
+    controller.smoothFollowFor(50)
+    clock += 60 // 超过 smooth 期
+    setScrollHeight(el, 1130, 100)
+    el.scrollTop = 1130
+
+    expect(controller.following).toBe(false)
+    expect(scrollMock.get()).toBe(1030) // 瞬时落底
+    expect(controller.entering).toBe(true)
   })
 
   it('动画期间 scroll 事件不打断动画（只有明确用户输入才打断）', () => {
@@ -373,10 +437,12 @@ describe('ScrollFlowController — 边缘回弹', () => {
     expect(flow.style.transform).toContain('translateY')
 
     // 继续滚：不松手就一直跟手拉动（无硬上限，软增益递减）。
+    // 减弱后的默认参数：同样滚轮输入拉动距离变小（< 原来的 24px）。
     el.dispatchEvent(makeWheel(-100))
     el.dispatchEvent(makeWheel(-100))
     const continued = controller.bounceShift
-    expect(continued).toBeGreaterThan(24)
+    expect(continued).toBeGreaterThan(12)
+    expect(continued).toBeLessThan(24)
 
     // 松手后（超过 releaseDelay）弹簧把位移带回 0。
     stepFrames(150)
@@ -527,6 +593,68 @@ describe('ScrollFlowController — 边缘回弹', () => {
 
     expect(lowShift).toBeGreaterThan(0)
     expect(highShift).toBeGreaterThan(lowShift)
+  })
+
+  it('status 后方的待插话消息出现：贴底跟随瞬时完成并反向补偿状态行（不被顶上去）', () => {
+    const el = makeScroller(1300, 100) // floor = 1200
+    const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    const pending = document.createElement('div')
+    pending.setAttribute('data-pending-steering', '')
+    flow.append(status, pending)
+    // 几何：status 占 26px，pending 占 78px，间距 32px（offsetTop 差体现）。
+    Object.defineProperty(status, 'offsetTop', { configurable: true, value: 396 })
+    Object.defineProperty(status, 'offsetHeight', { configurable: true, value: 26 })
+    Object.defineProperty(pending, 'offsetTop', { configurable: true, value: 500 })
+    Object.defineProperty(pending, 'offsetHeight', { configurable: true, value: 78 })
+
+    const controller = new ScrollFlowController(el).attach()
+    scrollMock.set(1200) // 已在底部
+    // 待插话消息出现 → 内容增长 110px（78 + 间距 32）→ 新 floor = 1310。
+    setScrollHeight(el, 1410, 100)
+    el.scrollTop = 1410 // 贴底跟随写入
+
+    // 瞬时落底（无平滑动画）。
+    expect(scrollMock.get()).toBe(1310)
+    expect(controller.following).toBe(false)
+    // 状态行反向补偿 +110（78 + gap 32 = 500 - 396 - 26 = 78 + 78 = 156？）
+    // gap = pending.offsetTop - status.offsetTop - status.offsetHeight
+    //     = 500 - 396 - 26 = 78 → after = 78 + 78 = 156。
+    expect(status.style.transform).toBe('translateY(156.00px)')
+    controller.dispose()
+  })
+
+  it('非贴底时 status 不补偿后方待插话消息', () => {
+    const el = makeScroller(1300, 100)
+    const flow = el.querySelector<HTMLElement>('[data-chat-flow]')!
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    const pending = document.createElement('div')
+    pending.setAttribute('data-pending-steering', '')
+    flow.append(status, pending)
+    Object.defineProperty(status, 'offsetTop', { configurable: true, value: 396 })
+    Object.defineProperty(status, 'offsetHeight', { configurable: true, value: 26 })
+    Object.defineProperty(pending, 'offsetTop', { configurable: true, value: 500 })
+    Object.defineProperty(pending, 'offsetHeight', { configurable: true, value: 78 })
+
+    const controller = new ScrollFlowController(el).attach()
+    scrollMock.set(600) // 不在底部（中间位置）
+    setScrollHeight(el, 1410, 100)
+    el.scrollTop = 1410 // 大距离（floor 1310 - real 600 = 710）→ 平滑动画
+
+    expect(controller.following).toBe(true)
+    stepFrames(100) // 动画中（约一半）
+    // 大距离动画期间状态行跟随内容（animating → 不补偿）。
+    expect(controller.following).toBe(true)
+    expect(status.style.transform).toBe('')
+    stepFrames(200) // 动画完成
+    // 到达新底部后，贴底时补偿后方待插话占位，状态行钉在待插话消息上方
+    // （不被顶出视口）。
+    expect(controller.following).toBe(false)
+    expect(scrollMock.get()).toBe(1310)
+    expect(status.style.transform).toBe('translateY(156.00px)')
+    controller.dispose()
   })
 })
 

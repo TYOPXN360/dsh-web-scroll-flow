@@ -20,21 +20,26 @@
  *   `entryOffset`（入场推升）+ `bounceOffset`（回弹拉伸）；Deep diving、
  *   待插话消息等"现场状态行"用反向位移保持固定在最终位置。
  * - 只有明确的用户输入（滚轮 / 触摸 / 鼠标按下 / 键盘滚动）会打断动画。
+ *
+ * 调试：关键决策（跟随写入分类、入场抑制、回弹触发）都写入
+ * debugLog，`window.__dshScrollFlowDebug.dump()` 可导出完整时间线。
  */
+
+import { debugLog } from './debug-log.ts'
 
 /** 回弹的橡皮筋状态机参数。 */
 export interface BounceOptions {
   /**
    * 软增益参考距离（px）：拉动越远，单位滚轮输入产生的位移越小
    * （增益 = 1/(1+|offset|/amplitude)），但是无硬上限——只要一直滚，
-   * 内容就一直跟手；松手后弹簧回中。默�达 24。
+   * 内容就一直跟手；松手后平滑缓动归位。默认 16。
    */
   amplitude: number
-  /** 释放阶段弹簧刚度（1/s²）。默认 160。 */
+  /** 松手归位缓动的基准时长（ms）。默认 160。 */
   stiffness: number
-  /** 释放阶段弹簧阻尼（1/s）。默认 12。 */
+  /** 归位缓动按距离的附加时长系数（ms/px）。默认 1.2。 */
   damping: number
-  /** 滚轮灵敏度：多少 deltaY 折算成一次 amplitude 的拉动。默认 140。 */
+  /** 滚轮灵敏度：多少 deltaY 折算成一次 amplitude 的拉动。默认 220。 */
   sensitivity: number
   /** 滚轮停止多久后进入释放回弹（ms）。默认 120。 */
   releaseDelay: number
@@ -60,11 +65,12 @@ export interface ScrollFlowOptions {
 }
 
 const DEFAULT_FOLLOW: FollowOptions = { duration: 200 }
+/** 减弱后的回弹：拉动更短（sensitivity 更高 + amplitude 更小）、回弹更软更快收敛。 */
 const DEFAULT_BOUNCE: BounceOptions = {
-  amplitude: 24,
-  stiffness: 160,
-  damping: 12,
-  sensitivity: 140,
+  amplitude: 16,
+  stiffness: 110,
+  damping: 14,
+  sensitivity: 220,
   releaseDelay: 120,
 }
 
@@ -74,6 +80,9 @@ const SAME_TARGET_TOLERANCE = 1
 const REST_EPSILON = 0.05
 /** 贴底小增量 vs 大距离跳转的分界（px）。 */
 const ENTRY_FOLLOW_DISTANCE = 48
+/** 待插话消息导致的增长上限（px）：超过视为普通大距离（回底/其它增长），
+ * 只有贴近该值的增长走"瞬时 + 状态行补偿"路径。 */
+const PENDING_MAX_DISTANCE = 500
 /** 入场推升的最大下压位移（px）。 */
 const ENTRY_PUSH_PX = 28
 /** 连续入场动画的最小间隔（ms），流式逐 token 时避免高频重启动画。 */
@@ -125,10 +134,24 @@ export class ScrollFlowController {
   private entryOffset = 0
   /** 抑制入场推升的截止时间：布局恢复（打字结束）引起的高度突变不应被当新内容入场。 */
   private suppressEntryUntil = 0
+  /** 打字机活动期截止时间：期间贴底跟随改用平滑滚动（每写完一行，上一行文字平滑上推）。 */
+  private smoothFollowUntil = 0
+  /** 本次 follow 动画被"不同目标"重载的次数（排障用）。 */
+  private followRestarts = 0
+  /** 本次入场推升被"重复触发"重载的次数（排障用）。 */
+  private entryRestarts = 0
+  /** 帧日志限频时间戳。 */
+  private lastFrameLogAt = 0
+  /** 状态行位置日志限频时间戳。 */
+  private lastStatusLogAt = 0
   /** 边缘回弹状态：跟手位移（px，顶边缘为正/向下拉，底边缘为负/向上拉）。 */
   private bounceOffset = 0
   private bounceVelocity = 0
   private releasing = false
+  /** 松手缓动归位状态（无弹簧振荡）。 */
+  private releaseStartOffset = 0
+  private releaseStartTime = 0
+  private releaseDuration = 120
   private lastWheelAt = 0
   private bounceFrameAt = 0
   private touchY: number | null = null
@@ -143,8 +166,8 @@ export class ScrollFlowController {
 
   /** 滚轮：用户手动滚动 → 打断动画；边缘继续向外滚时跟手拉动。 */
   private readonly onWheel = (event: WheelEvent): void => {
-    this.cancelAnimation()
-    this.cancelEntry()
+    this.cancelAnimation('wheel')
+    this.cancelEntry('wheel')
     this.applyEdgePull(event.deltaY, event)
   }
 
@@ -195,7 +218,7 @@ export class ScrollFlowController {
 
   /** 触摸开始：记录手指位置，后续只在边缘越界时接管。 */
   private readonly onTouchStart = (event: TouchEvent): void => {
-    this.cancelAll()
+    this.cancelAll('touch')
     this.touchY = event.touches[0]?.clientY ?? null
   }
 
@@ -204,8 +227,8 @@ export class ScrollFlowController {
     if (this.touchY === null || currentY === undefined) return
     const deltaY = this.touchY - currentY
     this.touchY = currentY
-    this.cancelAnimation()
-    this.cancelEntry()
+    this.cancelAnimation('touch')
+    this.cancelEntry('touch')
     this.applyEdgePull(deltaY, event)
   }
 
@@ -217,12 +240,12 @@ export class ScrollFlowController {
 
   /** 点击：非滚动交互（展开消息等），清掉残留位移避免重排时误显。 */
   private readonly onClick = (): void => {
-    this.cancelAll()
+    this.cancelAll('click')
   }
 
   /** 按下（滚动条拖动、触摸板点击等）：用户接管，打断动画。 */
   private readonly onPointerDown = (): void => {
-    this.cancelAll()
+    this.cancelAll('pointer')
   }
 
   /** 键盘滚动（PageUp/PageDown/方向键等）：用户接管，打断动画。 */
@@ -231,7 +254,7 @@ export class ScrollFlowController {
       || event.key === 'PageUp' || event.key === 'PageDown'
       || event.key === 'Home' || event.key === 'End'
       || event.key === ' ') {
-      this.cancelAll()
+      this.cancelAll('key')
     }
   }
 
@@ -258,11 +281,11 @@ export class ScrollFlowController {
     if ('follow' in options) this.follow = options.follow === undefined ? DEFAULT_FOLLOW : options.follow
     if ('bounce' in options) this.bounce = options.bounce === undefined ? DEFAULT_BOUNCE : options.bounce
     if (this.follow === null) {
-      this.cancelAnimation()
-      this.cancelEntry()
+      this.cancelAnimation('settings')
+      this.cancelEntry('settings')
     }
     if (this.bounce === null) {
-      this.resetBounce()
+      this.resetBounce('settings')
       this.applyFlowTransform()
     }
   }
@@ -309,9 +332,9 @@ export class ScrollFlowController {
     this.lastFlowHeight = flow.offsetHeight
     this.flowObserver = new ResizeObserver(() => {
       if (flow.offsetHeight < this.lastFlowHeight) {
-        this.cancelAnimation()
-        this.cancelEntry()
-        this.resetBounce()
+        this.cancelAnimation('height-shrink')
+        this.cancelEntry('height-shrink')
+        this.resetBounce('height-shrink')
         this.resetFlowTransform()
       }
       this.lastFlowHeight = flow.offsetHeight
@@ -323,7 +346,7 @@ export class ScrollFlowController {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    this.cancelAll()
+    this.cancelAll('dispose')
     this.flowObserver?.disconnect()
     this.flowObserver = null
     delete (this.element as unknown as Record<string, unknown>).scrollTop
@@ -357,7 +380,17 @@ export class ScrollFlowController {
   /** 在指定时长内抑制贴底入场推升（打字机恢复布局等非流式高度突变）。 */
   suppressEntryFor(durationMs: number): void {
     this.suppressEntryUntil = performance.now() + durationMs
-    this.cancelEntry()
+    this.cancelEntry('suppress')
+  }
+
+  /**
+   * 在指定时长内，贴底跟随写入改用平滑滚动（打字机每写完一行，上一行
+   * 文字平滑上推，而不是瞬时跳变 / 下压回弹）。由 index.ts 在打字机
+   * 内容增长时调用。
+   */
+  smoothFollowFor(durationMs: number): void {
+    this.smoothFollowUntil = performance.now() + durationMs
+    debugLog('anim', 'smooth-follow:arm', { durationMs, until: Math.round(this.smoothFollowUntil) })
   }
 
   /** 当前回弹位移（px）。 */
@@ -380,47 +413,140 @@ export class ScrollFlowController {
       && Math.abs(value - this.element.scrollHeight) <= SAME_TARGET_TOLERANCE
     if (!isFollowWrite) {
       // 非跟随写入（恢复位置 / prepend 锚定）：原样瞬时通过。
-      this.cancelAll()
+      debugLog('scroll', 'write:pass-through', {
+        value: Math.round(value), real: Math.round(real),
+        floor: Math.round(floor), scrollHeight: this.element.scrollHeight,
+      })
+      this.cancelAll('pass-through')
       this.nativeSet(value)
       this.reportedTop = this.nativeGet()
       return
     }
     const distance = floor - real
-    if (distance > ENTRY_FOLLOW_DISTANCE) {
-      // 大距离跳转（点击"回到底部"）：平滑滚动动画。
-      this.cancelEntry()
+    // 打字机活动期：贴底跟随用平滑滚动（每写完一行，上一行文字平滑上推，
+    // 而不是瞬时跳变 / 下压回弹）。大距离跳转也走平滑滚动动画。
+    const smoothing = performance.now() < this.smoothFollowUntil
+    // 待插话消息（status 后方）出现导致的小幅增长：瞬时跟随并立即补偿
+    // 状态行位置，避免 200ms 平滑滚动把 Deep diving 明显"顶上去"。只有
+    // 增长量接近待插话消息占位（而非用户在中部的大距离回底）才走该路径。
+    const pendingGrowth = this.statusHasPendingAfter()
+      && distance > 0 && distance <= PENDING_MAX_DISTANCE
+    if ((distance > ENTRY_FOLLOW_DISTANCE || smoothing) && pendingGrowth) {
+      debugLog('scroll', 'write:pending-instant', {
+        distance: Math.round(distance), floor: Math.round(floor),
+        real: Math.round(real), scrollHeight: this.element.scrollHeight,
+      })
+      this.cancelAnimation('pending')
+      this.cancelEntry('pending')
+      this.nativeSet(value)
+      // 立即应用状态行补偿（offset 为 0，status 被 +pending 占位拉回原位）。
+      this.applyFlowTransform()
+      return
+    }
+    if (distance > ENTRY_FOLLOW_DISTANCE || smoothing) {
+      debugLog('scroll', 'write:smooth-follow', {
+        distance: Math.round(distance), floor: Math.round(floor),
+        real: Math.round(real), scrollHeight: this.element.scrollHeight, smoothing,
+      })
+      this.cancelEntry('follow')
       this.startFollowAnimation(floor)
       return
     }
     // 贴底跟随（流式增量 / 自动换行 / 展开思维链）：瞬时落到新底部，
     // 再播放整列入场推升，避免滚动条动画在高频流式下震动。
-    this.cancelAnimation()
+    if (this.animating) {
+      // 平滑动画进行中（大距离收尾 / 打字机平滑期）：不要取消动画切到
+      // 入场推升，否则剩余距离会从平滑滚动突然变成瞬时跳（"回弹"感）。
+      // 同目标由 merge 合并，新目标重定向继续平滑。
+      debugLog('scroll', 'write:entry-push-animating', {
+        distance: Math.round(distance), real: Math.round(real), floor: Math.round(floor),
+      })
+      this.startFollowAnimation(floor)
+      return
+    }
+    debugLog('scroll', 'write:entry-push', {
+      distance: Math.round(distance), floor: Math.round(floor),
+      real: Math.round(real), scrollHeight: this.element.scrollHeight,
+    })
     this.nativeSet(value)
     this.startEntryPush()
   }
 
   private startFollowAnimation(target: number): void {
+    // 同目标动画进行中：合并写入，不重启。否则动画帧驱动 scroll 事件 →
+    // ChatView 读到"已到底"→ 再次写 scrollTop=scrollHeight → 新动画从
+    // 中间值重启，动画永远无法完成，页面持续平滑滚动（"集中爆发"）。
+    if (this.animating && Math.abs(target - this.animTarget) <= SAME_TARGET_TOLERANCE) {
+      debugLog('anim', 'follow:merge', {
+        target: Math.round(target), from: Math.round(this.animStart),
+      })
+      return
+    }
+    if (this.animating) {
+      // 动画进行中目标变化（内容继续增长）：从当前中间值重启，属于正常
+      // 重载，记录以便排查"动画总是重载"。
+      this.followRestarts++
+      debugLog('anim', 'follow:restart', {
+        from: Math.round(this.nativeGet()),
+        oldTarget: Math.round(this.animTarget),
+        newTarget: Math.round(target),
+        restarts: this.followRestarts,
+      })
+    } else {
+      this.followRestarts = 0
+    }
     this.animating = true
     this.animStart = this.nativeGet()
     this.animTarget = target
-    // 自适应时长：距离满 200px 用满配置值。
+    // 自适应时长：距离满 200px 用满配置值；打字机活动期小距离（一行）也
+    // 用平滑时长（160ms 封顶），让"写完一行上一行被平滑推上去"。
     const maxDuration = Math.max(1, this.follow?.duration ?? 1)
     const distance = Math.abs(target - this.animStart)
-    this.animDuration = Math.max(16, Math.min(maxDuration, maxDuration * (distance / 200)))
+    const smoothing = performance.now() < this.smoothFollowUntil
+    this.animDuration = smoothing
+      ? Math.min(maxDuration, Math.max(24, 160 * (distance / 48)))
+      : Math.max(16, Math.min(maxDuration, maxDuration * (distance / 200)))
     this.animStartTime = performance.now()
     // 立即向读取方报告目标：ChatView 的 observedTop 账本同步，回底按钮不闪。
     this.reportedTop = target
+    debugLog('anim', 'follow:start', {
+      from: Math.round(this.animStart), to: Math.round(target),
+      distance: Math.round(distance), duration: Math.round(this.animDuration),
+      smoothing, restarts: this.followRestarts,
+    })
     this.ensureFrame()
   }
 
   /** 贴底入场推升：整列先下压 ENTRY_PUSH_PX，再平滑回位（ChatAnimation 式）。 */
   private startEntryPush(): void {
     if (this.resolveBounceTarget() === null || this.follow === null) return
-    // 打字机恢复布局等非流式高度突变期间抑制入场，避免"打完字回弹"。
-    if (performance.now() < this.suppressEntryUntil) return
     const now = performance.now()
+    // 打字机恢复布局等非流式高度突变期间抑制入场，避免"打完字回弹"。
+    if (now < this.suppressEntryUntil) {
+      debugLog('scroll', 'entry-push:suppressed', {
+        until: Math.round(this.suppressEntryUntil), now: Math.round(now),
+      })
+      return
+    }
     // 流式逐 token 时高频到达：已有动画在播就不重启，避免连续下压抖动。
-    if (this.entryActive && now - this.lastEntryStartAt < ENTRY_MIN_INTERVAL) return
+    if (this.entryActive && now - this.lastEntryStartAt < ENTRY_MIN_INTERVAL) {
+      debugLog('scroll', 'entry-push:throttled', {
+        lastStart: Math.round(this.lastEntryStartAt), now: Math.round(now),
+      })
+      return
+    }
+    if (this.entryActive) {
+      // 动画播放中且超过最小间隔：整列重新下压（重载），记录次数。
+      this.entryRestarts++
+      debugLog('anim', 'entry:restart', {
+        restarts: this.entryRestarts, sinceLast: Math.round(now - this.lastEntryStartAt),
+      })
+    } else {
+      this.entryRestarts = 0
+    }
+    debugLog('scroll', 'entry-push:start', {
+      push: ENTRY_PUSH_PX, duration: this.follow.duration,
+    })
     this.entryActive = true
     this.entryPush = ENTRY_PUSH_PX
     this.entryDuration = Math.max(16, this.follow.duration)
@@ -429,28 +555,41 @@ export class ScrollFlowController {
     this.ensureFrame()
   }
 
-  private cancelAnimation(): void {
+  private cancelAnimation(reason = 'unknown'): void {
     if (!this.animating) return
+    debugLog('anim', 'follow:cancel', {
+      reason, at: Math.round(this.nativeGet()), target: Math.round(this.animTarget),
+      restarts: this.followRestarts,
+    })
     this.animating = false
     this.reportedTop = this.nativeGet()
   }
 
-  private cancelEntry(): void {
+  private cancelEntry(reason = 'unknown'): void {
     if (!this.entryActive) return
+    debugLog('anim', 'entry:cancel', {
+      reason, offset: Math.round(this.entryOffset * 100) / 100,
+      restarts: this.entryRestarts,
+    })
     this.entryActive = false
     this.entryOffset = 0
     this.applyFlowTransform()
   }
 
   /** 用户输入 / 关闭设置：取消全部动画并清理位移。 */
-  private cancelAll(): void {
-    this.cancelAnimation()
-    this.cancelEntry()
-    this.resetBounce()
+  private cancelAll(reason = 'unknown'): void {
+    this.cancelAnimation(reason)
+    this.cancelEntry(reason)
+    this.resetBounce(reason)
   }
 
   /** 清除回弹状态（触控 / 关闭设置等用户操作，瞬时清干净）。 */
-  private resetBounce(): void {
+  private resetBounce(reason = 'unknown'): void {
+    if (Math.abs(this.bounceOffset) > REST_EPSILON) {
+      debugLog('anim', 'bounce:reset', {
+        reason, offset: Math.round(this.bounceOffset * 100) / 100,
+      })
+    }
     this.bounceOffset = 0
     this.bounceVelocity = 0
     this.releasing = false
@@ -458,14 +597,27 @@ export class ScrollFlowController {
     this.applyFlowTransform()
   }
 
-  /** 松手释放：进入弹簧回中模式（offset 保留不回零，弹簧带回）。 */
+  /** 松手释放：进入平滑缓动归位模式（offset 保留不回零，缓动带回；无振荡）。 */
   private beginRelease(): void {
     if (Math.abs(this.bounceOffset) <= REST_EPSILON) {
-      this.resetBounce()
+      this.resetBounce('release-idle')
       return
     }
     this.releasing = true
     this.bounceVelocity = 0
+    // 缓动归位：时长按位移距离自适应（基准 + 每 px 附加），避免大位移
+    // 也瞬间弹回；easeOut 一次到位，不来回振荡。
+    const distance = Math.abs(this.bounceOffset)
+    this.releaseStartOffset = this.bounceOffset
+    this.releaseStartTime = performance.now()
+    this.releaseDuration = Math.max(
+      80,
+      Math.min(320, (this.bounce?.stiffness ?? 160) + distance * (this.bounce?.damping ?? 1.2)),
+    )
+    debugLog('anim', 'bounce:release-start', {
+      offset: Math.round(this.bounceOffset * 100) / 100,
+      duration: Math.round(this.releaseDuration),
+    })
   }
 
   private syncReducedMotion(): void {
@@ -479,7 +631,7 @@ export class ScrollFlowController {
 
   private readonly onReducedMotionChange = (): void => {
     this.syncReducedMotion()
-    if (this.reducedMotion) this.cancelAll()
+    if (this.reducedMotion) this.cancelAll('reduced-motion')
   }
 
   /** 惰性解析内容列：视图切换（chat ↔ trajectory）后下次动画重新查找。 */
@@ -514,6 +666,50 @@ export class ScrollFlowController {
   }
 
   /**
+   * status 后方是否存在待插话消息（data-pending-steering 出现在状态行之后）。
+   * 存在时，待插话消息导致的贴底跟随会走"瞬时 + 状态行补偿"路径。
+   */
+  private statusHasPendingAfter(): boolean {
+    const target = this.resolveBounceTarget()
+    if (target === null) return false
+    const status = Array.from(target.children).find(
+      (child): child is HTMLElement => child instanceof HTMLElement
+        && child.matches('[role="status"]'),
+    )
+    if (status === undefined) return false
+    let sibling = status.nextElementSibling
+    while (sibling !== null) {
+      if (sibling instanceof HTMLElement && sibling.matches('[data-pending-steering]')) {
+        return true
+      }
+      sibling = sibling.nextElementSibling
+    }
+    return false
+  }
+
+  /**
+   * status 后方的待插话消息总占位（含间距）。待插话消息渲染在 Deep diving
+   * 状态行之后（flow 末尾），出现时 scrollHeight 增长、贴底跟随把视口往下
+   * 推，状态行会被"顶上去"；贴底时用该值反向补偿，把状态行拉回原位。
+   */
+  private pendingShiftAfter(status: HTMLElement): number {
+    let shift = 0
+    let prev: HTMLElement | null = status
+    let sibling = status.nextElementSibling
+    while (sibling !== null) {
+      if (sibling instanceof HTMLElement && sibling.matches('[data-pending-steering]')) {
+        // offsetTop 是相对 flow（offsetParent）的坐标，不受滚动影响；
+        // 与上一个兄弟的 offsetTop 差 = 该行占位（含列 gap）。
+        const gap = Math.max(0, sibling.offsetTop - prev.offsetTop - prev.offsetHeight)
+        shift += sibling.offsetHeight + gap
+        prev = sibling
+      }
+      sibling = sibling.nextElementSibling
+    }
+    return shift
+  }
+
+  /**
    * 统一渲染内容列位移：入场推升 + 回弹拉伸叠加到 transform；直接状态行
    * 用反向位移保持在原位置。
    */
@@ -532,13 +728,34 @@ export class ScrollFlowController {
     // content so it stays out of view until the scroll reaches the bottom.
     // Pinning applies to manual edge bounce and small entry pushes only.
     for (const el of this.fixedStatusElements(target)) {
-      const pendingShift = el.matches('[role="status"]') ? this.pendingShiftBefore(el) : 0
-      const counterOffset = this.animating ? 0 : -offset - pendingShift
+      const isStatus = el.matches('[role="status"]')
+      const pendingShift = isStatus ? this.pendingShiftBefore(el) : 0
+      // 贴底时，status 后方的待插话消息会把状态行顶上去（视口跟随）：反向
+      // 补偿其占位，把状态行拉回原位。非贴底（用户浏览中间）不补偿。
+      const atBottom = this.nativeGet()
+        >= Math.max(0, this.element.scrollHeight - this.element.clientHeight) - 1
+      const afterShift = isStatus && atBottom ? this.pendingShiftAfter(el) : 0
+      const counterOffset = this.animating ? 0 : -offset - pendingShift + afterShift
       const counter = Math.abs(counterOffset) > REST_EPSILON
         ? `translateY(${counterOffset.toFixed(2)}px)`
         : ''
       el.style.transform = counter
       el.style.willChange = counter === '' ? '' : 'transform'
+      // 状态行位置日志（限频 120ms）：排查"发送待插话消息时 Deep diving
+      // 被顶上去"——记录补偿位移、待插话行高与 offset 的关系。
+      const statusNow = performance.now()
+      if (statusNow - this.lastStatusLogAt > 120) {
+        this.lastStatusLogAt = statusNow
+        debugLog('anim', 'status-transform', {
+          role: isStatus ? 'status' : 'pending',
+          counterOffset: Math.round(counterOffset * 100) / 100,
+          pendingShift: Math.round(pendingShift * 100) / 100,
+          afterShift: Math.round(afterShift * 100) / 100,
+          offset: Math.round(offset * 100) / 100,
+          animating: this.animating,
+          transform: counter,
+        })
+      }
     }
   }
 
@@ -572,6 +789,9 @@ export class ScrollFlowController {
         this.nativeSet(this.animTarget)
         this.animating = false
         this.reportedTop = this.nativeGet()
+        debugLog('anim', 'follow:complete', {
+          duration: Math.round(now - this.animStartTime), restarts: this.followRestarts,
+        })
       } else {
         const value = this.animStart + (this.animTarget - this.animStart) * easeOutCubic(t)
         this.nativeSet(value)
@@ -586,6 +806,9 @@ export class ScrollFlowController {
       if (t >= 1) {
         this.entryActive = false
         this.entryOffset = 0
+        debugLog('anim', 'entry:complete', {
+          duration: Math.round(now - this.entryStartTime), restarts: this.entryRestarts,
+        })
       } else {
         active = true
       }
@@ -600,16 +823,13 @@ export class ScrollFlowController {
         this.beginRelease()
       }
       if (this.releasing) {
-        const dt = this.bounceFrameAt === 0
-          ? 0.016
-          : clamp((now - this.bounceFrameAt) / 1_000, 0.001, 0.05)
-        this.bounceFrameAt = now
-        this.bounceVelocity += -this.bounceOffset * this.bounce.stiffness * dt
-        this.bounceVelocity *= Math.exp(-this.bounce.damping * dt)
-        this.bounceOffset += this.bounceVelocity * dt
-        const settled = Math.abs(this.bounceOffset) <= REST_EPSILON
-          && Math.abs(this.bounceVelocity) <= REST_EPSILON
-        if (settled) {
+        // 松手：平滑缓动归位（easeOut，一次性返回原处，无弹簧振荡）。
+        const t = clamp(
+          (now - this.releaseStartTime) / Math.max(1, this.releaseDuration),
+          0, 1,
+        )
+        this.bounceOffset = this.releaseStartOffset * (1 - easeOutCubic(t))
+        if (t >= 1) {
           this.bounceOffset = 0
           this.bounceVelocity = 0
           this.releasing = false
@@ -619,6 +839,20 @@ export class ScrollFlowController {
       } else if (Math.abs(this.bounceOffset) > REST_EPSILON) {
         // 跟手拉动中：保持帧循环，等待滚轮停止后进入释放。
         active = true
+      }
+    }
+
+    // 帧级日志（限频 30ms）：记录动画实际播放过程，排查"动画总是重载"。
+    if (now - this.lastFrameLogAt > 30) {
+      this.lastFrameLogAt = now
+      if (this.animating || this.entryActive || Math.abs(this.bounceOffset) > REST_EPSILON) {
+        debugLog('anim', 'frame', {
+          follow: this.animating ? Math.round(this.nativeGet()) : null,
+          entry: this.entryActive ? Math.round(this.entryOffset * 100) / 100 : null,
+          bounce: Math.abs(this.bounceOffset) > REST_EPSILON
+            ? Math.round(this.bounceOffset * 100) / 100
+            : null,
+        })
       }
     }
 

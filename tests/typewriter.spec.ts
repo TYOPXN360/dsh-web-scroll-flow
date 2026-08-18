@@ -416,6 +416,102 @@ describe('TypewriterController', () => {
     typewriter.dispose()
   })
 
+  it('旧节点增长时打字机从已见位置继续，不重打已见内容', async () => {
+    const { flow, markdowns } = makeMarkdownFlow(['已经显示的内容'])
+    const markdown = markdowns[0]!
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 100,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    // 宽限期内的变化视为历史加载（不启动），但 lastSeen 已推进。
+    await growText(markdown, '已经显示的内容历史')
+    expect(typewriter.active).toBe(false)
+
+    // 宽限期后增长：起点 = 上次已见文本长度（9），而不是 0。
+    clock += 100
+    await growText(markdown, '已经显示的内容历史新增部分')
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.shown).toBe('已经显示的内容历史'.length)
+    // 目标仍是完整文本。
+    expect(typewriter.targetLength).toBe('已经显示的内容历史新增部分'.length)
+    typewriter.dispose()
+  })
+
+  it('thinkBody 首次出现（展开思考链）直接显示完整内容，后续增长才从已见位置打字', async () => {
+    const flow = document.createElement('div')
+    flow.setAttribute('data-chat-flow', '')
+    const status = document.createElement('div')
+    status.setAttribute('role', 'status')
+    status.textContent = 'Deep diving...'
+    flow.append(status)
+    document.body.append(flow)
+
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 1_000,
+      cursorHold: 50,
+    }).attach()
+
+    // attach 后 thinkBody 首次出现（用户展开已思考很久的链）：完整内容
+    // 直接可见，不启动打字机（避免"先完整显示、再全部消失从头打"）。
+    const think = document.createElement('div')
+    think.setAttribute('data-variant', 'think')
+    think.setAttribute('data-state', 'running')
+    const body = document.createElement('div')
+    body.className = '_thinkBody_abc'
+    body.textContent = '思考了很长的完整内容'
+    think.append(body)
+    flow.append(think)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.active).toBe(false)
+    expect(think.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).toBeNull()
+    // 完整文本保持可见（未被隐藏）。
+    expect(body.style.visibility).not.toBe('hidden')
+
+    // 后续流式增长：从已见位置继续打字，只打新增部分。
+    body.textContent = '思考了很长的完整内容新增部分'
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.shown).toBe('思考了很长的完整内容'.length)
+    typewriter.dispose()
+  })
+
+  it('settle 等待恢复时新内容到达会取消恢复并继续打字', async () => {
+    const { flow, markdowns } = makeMarkdownFlow([''])
+    const markdown = markdowns[0]!
+    const typewriter = new TypewriterController(flow, {
+      loadGrace: 0,
+      baseSpeed: 0.1,
+      settleDelay: 100,
+      cursorHold: 5_000,
+    }).attach()
+
+    await growText(markdown, 'abcdef')
+    // 打字到完成。
+    for (let i = 0; i < 20; i++) {
+      clock += 16
+      typewriter.tick(clock)
+    }
+    // settle 触发：进入"光标保留"阶段（holdTimer 挂着，session 仍活跃）。
+    clock += 200
+    typewriter.tick(clock)
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.shown).toBe(6)
+
+    // 新内容到达 → extension → 取消恢复计时，继续打字。
+    await growText(markdown, 'abcdefgh')
+    expect(typewriter.active).toBe(true)
+    expect(typewriter.targetLength).toBe(8)
+    clock += 16
+    typewriter.tick(clock)
+    expect(typewriter.shown).toBeGreaterThan(6)
+    typewriter.dispose()
+  })
+
   it('overlay 自身 mutation 不会误重启打字机', async () => {
     const { flow, markdowns, shells } = makeMarkdownFlow([''])
     const markdown = markdowns[0]!

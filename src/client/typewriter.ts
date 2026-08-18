@@ -12,7 +12,12 @@
  * - 覆盖层继承目标 markdown 的字体 / 行高 / 颜色，位置一致。
  * - 文本总量大时按公式线性提速，确保非常大段也尽快打完。
  * - 文本停止增长超过阈值视为流式结束：恢复原始 Markdown，短暂保留光标。
+ *
+ * 调试：每个 markdown 的流式决策（启动 / 迁移 / 跳过）与打字机起点都写入
+ * debugLog，`window.__dshScrollFlowDebug.dump()` 可导出完整时间线。
  */
+
+import { debugLog } from './debug-log.ts'
 
 /** 覆盖层用 class 标记，便于测试与清理。 */
 export const TYPEWRITER_OVERLAY_CLASS = 'dsh-scroll-flow-typewriter-overlay'
@@ -233,6 +238,15 @@ export class TypewriterController {
           existing.targetText = text
           existing.textLengths = this.textLengths(markdown)
           existing.lastGrowthAt = performance.now()
+          debugLog('tw', 'session:extension', {
+            targetLen: text.length, shownChars: existing.shownChars,
+            think: markdown.matches(THINK_BODY_SELECTOR),
+          })
+          // 已在 settle 等待恢复时新内容到达：取消恢复计时，继续打字。
+          if (existing.holdTimer !== undefined) {
+            clearTimeout(existing.holdTimer)
+            existing.holdTimer = undefined
+          }
           this.options.onContentChange?.()
           this.lastSeenByMarkdown.set(markdown, text)
           if (existing.shownChars >= existing.targetText.length) {
@@ -248,8 +262,15 @@ export class TypewriterController {
         continue
       }
       this.lastSeenByMarkdown.set(markdown, text)
+      // 空文本节点（消息容器挂载但还没有内容）不启动打字机。
+      if (text.length === 0) continue
       // 宽限期内的变化都视为历史加载，不启动。
-      if (loading) continue
+      if (loading) {
+        debugLog('tw', 'skip:loading-grace', {
+          textLen: text.length, think: markdown.matches(THINK_BODY_SELECTOR),
+        })
+        continue
+      }
       // React may replace the completed Markdown node with an equivalent node;
       // keep the finished content instead of replaying the typewriter.
       if (this.completedTextOf(markdown) === text) continue
@@ -260,16 +281,40 @@ export class TypewriterController {
       // （真实思维链可能不是前缀增长，而是整段渲染）。
       if (isNewNode) {
         if (this.tryMigrateSession(markdown, text)) continue
-        this.startSession(markdown, text)
+        // thinkBody 首次出现（lastSeen 无记录，用户展开思考链）：DSH 已经把
+        // 完整内容渲染出来，用户已看到 —— 不启动打字机，等后续增长再从
+        // "已见位置"继续打字，避免"完整文本先闪现、再全部消失从头打"。
+        if (markdown.matches(THINK_BODY_SELECTOR) && lastSeen === undefined) {
+          debugLog('tw', 'skip:think-body-first-show', { textLen: text.length })
+          continue
+        }
+        // 正文新节点从 0 开始打字；若该节点之前在宽限期内已显示过
+        // （lastSeen 有记录），从已见位置继续，避免重打已见内容。
+        const startChars = lastSeen?.length ?? 0
+        debugLog('tw', 'session:start-new', {
+          textLen: text.length, startChars, think: markdown.matches(THINK_BODY_SELECTOR),
+        })
+        this.startSession(markdown, text, startChars)
         continue
       }
       // 旧节点：同一消息内被替换（思维链流式）时优先迁移；否则需要增长。
       if (this.tryMigrateSession(markdown, text)) continue
       if (!growth) continue
-      this.startSession(markdown, text)
+      // 旧节点增长：起点 = 上次已见文本长度（用户已看到的部分直接保留，
+      // 只把新增部分逐字打出来；否则"先显示、再全部消失重打"）。
+      const startChars = lastSeen?.length ?? 0
+      debugLog('tw', 'session:start-growth', {
+        textLen: text.length, startChars, lastSeenLen: lastSeen?.length ?? -1,
+      })
+      this.startSession(markdown, text, startChars)
     }
     for (const [markdown, session] of this.sessions) {
-      if (!markdown.isConnected || !live.has(markdown)) this.teardownSession(session)
+      if (!markdown.isConnected || !live.has(markdown)) {
+        debugLog('tw', 'session:teardown-detached', {
+          textLen: session.targetText.length, shownChars: session.shownChars,
+        })
+        this.teardownSession(session)
+      }
     }
   }
 
@@ -358,7 +403,7 @@ export class TypewriterController {
     this.ensureStreaming(session)
   }
 
-  private startSession(markdown: HTMLElement, text: string): void {
+  private startSession(markdown: HTMLElement, text: string, startChars = 0): void {
     const session: TypewriterSession = {
       markdown,
       messageContainer: this.messageContainerOf(markdown),
@@ -367,12 +412,19 @@ export class TypewriterController {
       overlay: null,
       textLengths: this.textLengths(markdown),
       targetText: text,
-      shownChars: 0,
+      // 起点 = 用户已经看到的内容长度：只把新增部分逐字打出来，
+      // 避免"DSH 先渲染完整文本 → 打字机再全部隐藏从头打"的闪烁。
+      shownChars: Math.max(0, Math.min(startChars, text.length)),
       lastGrowthAt: performance.now(),
       lastEmitAt: 0,
       settleTimer: undefined,
       holdTimer: undefined,
     }
+    debugLog('tw', 'session:start', {
+      textLen: text.length, startChars: session.shownChars,
+      think: markdown.matches(THINK_BODY_SELECTOR),
+      summary: markdown.matches(THINK_SUMMARY_SELECTOR),
+    })
     this.sessions.set(markdown, session)
     this.options.onContentChange?.()
     this.installOverlay(session)
@@ -412,7 +464,12 @@ export class TypewriterController {
     // throughput that parallel sessions previously produced.
     const speed = pending.reduce((total, item) => total + this.effectiveSpeed(item.targetText.length), 0)
     const charsToAdd = Math.max(1, Math.floor(delta * speed))
+    const previous = session.shownChars
     session.shownChars = Math.min(session.targetText.length, session.shownChars + charsToAdd)
+    // 逐字渲染推进（新行出现）也续期"平滑跟随"：打字机期间行增长用平滑
+    // 滚动（上一行被平滑推上去），而不是 entry push 下压回弹。只有实际
+    // 推进（新字符出现）才续期；打字完成等待 settle 时不续期。
+    if (session.shownChars > previous) this.options.onContentChange?.()
     this.renderOverlay(session)
     if (session.shownChars >= session.targetText.length
       && now - session.lastGrowthAt >= this.options.settleDelay) {
@@ -444,6 +501,10 @@ export class TypewriterController {
     const markdown = session.markdown
     const shell = session.shell
     if (shell === null) return
+    debugLog('tw', 'overlay:install', {
+      textLen: session.targetText.length, shownChars: session.shownChars,
+      think: markdown.matches(THINK_BODY_SELECTOR),
+    })
     const overlay = markdown.cloneNode(true) as HTMLDivElement
     this.stripInteractiveControls(overlay)
     overlay.classList.add(TYPEWRITER_OVERLAY_CLASS)
@@ -482,6 +543,9 @@ export class TypewriterController {
       session.overlay = overlay
       overlay.style.display = session.shownChars > 0 ? 'block' : 'none'
       nodes = this.textNodes(overlay)
+      // 重建后节点结构来自最新 markdown，textLengths 必须同步，否则
+      // 后面的前缀分配按旧长度错位，部分文本永远不显示（"跳过"）。
+      session.textLengths = nodes.map(node => node.data.length)
     }
     const cursor = overlay.querySelector<HTMLSpanElement>(`.${TYPEWRITER_OVERLAY_CLASS}-cursor`)
       ?? this.createCursor()
@@ -491,7 +555,11 @@ export class TypewriterController {
     const nodeStarts = new Map<Text, number>()
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i]!
-      const length = session.textLengths[i] ?? 0
+      // 以实际节点长度为准；textLengths 是 React 全量写入时的快照，仅用于
+      // 跨帧保持同一批节点的长度一致。若实际节点与快照不一致（结构变化），
+      // 以实际长度对齐 targetText，避免整段不显示（"跳过"）。
+      const snapshot = i < session.textLengths.length ? session.textLengths[i]! : -1
+      const length = snapshot >= 0 ? snapshot : Math.max(0, prefix.length - offset)
       nodeStarts.set(node, offset)
       const take = Math.max(0, Math.min(length, prefix.length - offset))
       node.data = prefix.slice(offset, offset + take)
@@ -535,6 +603,9 @@ export class TypewriterController {
   /** 流式稳定：结束打字，保留光标一小段时间后恢复原始 Markdown。 */
   private settle(session: TypewriterSession): void {
     if (session.settleTimer === undefined && session.overlay === null) return
+    debugLog('tw', 'session:settle', {
+      textLen: session.targetText.length, shownChars: session.shownChars,
+    })
     clearTimeout(session.settleTimer)
     session.settleTimer = undefined
     if (session.shownChars < session.targetText.length) session.shownChars = session.targetText.length
@@ -551,6 +622,9 @@ export class TypewriterController {
   }
 
   private teardownSession(session: TypewriterSession): void {
+    debugLog('tw', 'session:teardown', {
+      textLen: session.targetText.length, shownChars: session.shownChars,
+    })
     clearTimeout(session.settleTimer)
     clearTimeout(session.holdTimer)
     session.settleTimer = undefined

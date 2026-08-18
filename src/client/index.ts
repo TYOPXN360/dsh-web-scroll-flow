@@ -14,6 +14,7 @@ import {
   type ScrollFlowSettings, type TypewriterMode,
 } from './scroll-flow-settings.ts'
 import { ScrollFlowSettingsRow, type ScrollFlowSettingsRowInjected } from './settings-row.tsx'
+import { debugLog, mountDebugGlobal } from './debug-log.ts'
 
 export const name = 'dsh-web-scroll-flow'
 
@@ -52,8 +53,9 @@ function createTypewriter(
 ): TypewriterLike {
   const flow = element.querySelector<HTMLElement>('[data-chat-flow]') ?? element
   const onRestore = (): void => { controller.suppressEntryFor(600) }
-  // Keep scroll entry-push from competing with per-chunk Markdown reflow.
-  const onContentChange = (): void => { controller.suppressEntryFor(1_000) }
+  // 打字机内容增长（每写完一行高度 + 一行）：期间贴底跟随用平滑滚动，
+  // 让上一行文字被平滑往上推；而不是瞬时跳变或下压回弹。
+  const onContentChange = (): void => { controller.smoothFollowFor(1_000) }
   // Both modes use the parsed, non-destructive renderer. It clones React's
   // Markdown tree and progressively reveals clone text nodes without touching
   // the source DOM, preserving formatting while avoiding full-text flashes.
@@ -169,7 +171,19 @@ export function apply(ctx: Context): void {
   thinkStyle.textContent = '[data-variant="think"][data-state="running"] [class*="summary"]{scroll-behavior:smooth}'
   document.head.appendChild(thinkStyle)
 
+  // 禁用对话滚动容器的滚动锚定：打字机隐藏 / 恢复 Markdown 与覆盖层增长
+  // 会触发浏览器 overflow-anchor 自动调整 scrollTop，表现为"页面被悄悄往上
+  // 拉"（即使我们的 scrollTop setter 没有收到任何写入）。
+  const anchorStyle = document.createElement('style')
+  anchorStyle.id = 'dsh-scroll-anchor-none'
+  anchorStyle.textContent = '[data-conversation-scroll]{overflow-anchor:none}'
+  document.head.appendChild(anchorStyle)
+
+  // 调试日志全局读取接口（window.__dshScrollFlowDebug）。
+  mountDebugGlobal()
+
   ctx.effect(() => {
+    debugLog('install', 'effect-start', {})
     const install = installScrollFlow(
       document,
       syncInstallOptions(),
@@ -195,6 +209,8 @@ export function apply(ctx: Context): void {
       disposeTypewriter()
       disposeTypewriterMode()
       thinkStyle.remove()
+      anchorStyle.remove()
+      debugLog('install', 'effect-stop', {})
       install.dispose()
     }
   })
