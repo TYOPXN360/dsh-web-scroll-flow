@@ -14,6 +14,7 @@ import {
   type ScrollFlowSettings, type TypewriterMode,
 } from './scroll-flow-settings.ts'
 import { ScrollFlowSettingsRow, type ScrollFlowSettingsRowInjected } from './settings-row.tsx'
+import { ThinkBodyMarkdown } from './think-body-markdown.ts'
 
 export const name = 'dsh-web-scroll-flow'
 
@@ -163,6 +164,19 @@ export function apply(ctx: Context): void {
       : null,
   })
 
+  // 正在思考的摘要文字 + 展开的思考内容：smooth 推进。
+  // 放在 effect 外面，生命周期跟随整个插件，不受 effect 重建影响。
+  const thinkStyle = document.createElement('style')
+  thinkStyle.id = 'dsh-think-scroll-smooth'
+  thinkStyle.textContent = [
+    '[data-variant="think"][data-state="running"] [class*="summary"]{scroll-behavior:smooth}',
+    '[data-variant="think"][data-state="running"] [class*="thinkBody"]{scroll-behavior:smooth}',
+  ].join('')
+  document.head.appendChild(thinkStyle)
+
+  // 思考链内容 Markdown 渲染
+  const thinkMd = new ThinkBodyMarkdown(document).attach()
+
   ctx.effect(() => {
     const install = installScrollFlow(
       document,
@@ -170,14 +184,6 @@ export function apply(ctx: Context): void {
       policy.typewriterEnabled.getSnapshot(),
       policy.typewriterMode.getSnapshot(),
     )
-    // 正在思考的摘要文字 + 展开的思考内容：smooth 推进。
-    const style = document.createElement('style')
-    style.id = 'dsh-think-scroll-smooth'
-    style.textContent = [
-      '[data-variant="think"][data-state="running"] [class*="summary"]{scroll-behavior:smooth}',
-      '[data-variant="think"][data-state="running"] [class*="thinkBody"]{scroll-behavior:smooth}',
-    ].join('')
-    document.head.appendChild(style)
     const disposeFollow = policy.followMode.subscribe(() => {
       install.setOptions({ follow: followOptionsForMode(policy.followMode.getSnapshot()) })
       // 档位关闭时也关掉打字机；重新开启时无法在已挂载的安装上补装，
@@ -198,8 +204,15 @@ export function apply(ctx: Context): void {
       disposeBounce()
       disposeTypewriter()
       disposeTypewriterMode()
-      style.remove()
       install.dispose()
+    }
+  })
+
+  // 插件卸载时清理所有持久资源
+  ctx.effect(() => {
+    return () => {
+      thinkStyle.remove()
+      thinkMd.dispose()
     }
   })
 

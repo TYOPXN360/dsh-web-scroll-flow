@@ -78,6 +78,12 @@ const INHERITED_TEXT_STYLES: readonly (keyof CSSStyleDeclaration)[] = [
 /** 消息 Markdown 容器选择器：Markdown 渲染根（hash class 前缀不固定，按特征匹配）。 */
 const MARKDOWN_SELECTOR = '[class*="_markdown_"], [data-dsh-markdown], .markdown'
 
+/** 思考链内容选择器。 */
+const THINK_BODY_SELECTOR = '[data-variant="think"][aria-expanded="true"] > * > [class*="thinkBody"], [class*="thinkBody"]'
+
+/** 组合内容选择器：主消息 Markdown + 思考链 body。 */
+const CONTENT_SELECTOR = `${MARKDOWN_SELECTOR}, ${THINK_BODY_SELECTOR}`
+
 /** 一个流式目标的打字机状态。 */
 interface TypewriterSession {
   markdown: HTMLElement
@@ -168,8 +174,8 @@ export class TypewriterController {
   }
 
   private markdowns(): HTMLElement[] {
-    return Array.from(this.flow.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
-      .filter(markdown => !markdown.classList.contains(TYPEWRITER_OVERLAY_CLASS))
+    return Array.from(this.flow.querySelectorAll<HTMLElement>(CONTENT_SELECTOR))
+      .filter(el => !el.classList.contains(TYPEWRITER_OVERLAY_CLASS))
   }
 
   private textNodes(root: Node): Text[] {
@@ -278,7 +284,7 @@ export class TypewriterController {
   private markdownIndexOf(el: HTMLElement): number {
     const container = this.messageContainerOf(el)
     if (container === null) return -1
-    return Array.from(container.querySelectorAll<HTMLElement>(MARKDOWN_SELECTOR))
+    return Array.from(container.querySelectorAll<HTMLElement>(CONTENT_SELECTOR))
       .filter(markdown => !markdown.classList.contains(TYPEWRITER_OVERLAY_CLASS))
       .indexOf(el)
   }

@@ -51,7 +51,7 @@ function makeCtx(): {
   setFollowMode(mode: 'off' | 'gentle' | 'medium'): void
   setBounceEnabled(enabled: boolean): void
 } {
-  let cleanup: (() => void) | undefined
+  const cleanups: Array<() => void> = []
   let followMode: 'off' | 'gentle' | 'medium' = 'medium'
   let bounceEnabled = true
   const settingsListeners = new Set<() => void>()
@@ -76,14 +76,14 @@ function makeCtx(): {
   const ctx = {
     effect(fn: () => (() => void) | void): void {
       const result = fn()
-      if (typeof result === 'function') cleanup = result
+      if (typeof result === 'function') cleanups.push(result)
     },
     settingsScope: { bind: () => scope },
     slots,
   } as unknown as Context
   return {
     ctx,
-    cleanup: () => { cleanup?.() },
+    cleanup: () => { for (const fn of cleanups.reverse()) fn() },
     setFollowMode: mode => scope.set('followMode', mode),
     setBounceEnabled: enabled => scope.set('bounceEnabled', enabled),
   }
