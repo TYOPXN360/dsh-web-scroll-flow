@@ -170,10 +170,13 @@ export function apply(ctx: Context): void {
       policy.typewriterEnabled.getSnapshot(),
       policy.typewriterMode.getSnapshot(),
     )
-    // 正在思考的摘要文字：scrollLeft 跟随新文字平滑推进。
+    // 正在思考的摘要文字 + 展开的思考内容：smooth 推进。
     const style = document.createElement('style')
     style.id = 'dsh-think-scroll-smooth'
-    style.textContent = '[data-variant="think"][data-state="running"] [class*="summary"]{scroll-behavior:smooth}'
+    style.textContent = [
+      '[data-variant="think"][data-state="running"] [class*="summary"]{scroll-behavior:smooth}',
+      '[data-variant="think"][data-state="running"] [class*="thinkBody"]{scroll-behavior:smooth}',
+    ].join('')
     document.head.appendChild(style)
     const disposeFollow = policy.followMode.subscribe(() => {
       install.setOptions({ follow: followOptionsForMode(policy.followMode.getSnapshot()) })
