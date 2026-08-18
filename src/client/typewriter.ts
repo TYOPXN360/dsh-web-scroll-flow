@@ -78,11 +78,14 @@ const INHERITED_TEXT_STYLES: readonly (keyof CSSStyleDeclaration)[] = [
 /** 消息 Markdown 容器选择器：Markdown 渲染根（hash class 前缀不固定，按特征匹配）。 */
 const MARKDOWN_SELECTOR = '[class*="_markdown_"], [data-dsh-markdown], .markdown'
 
-/** 思考链内容选择器。 */
-const THINK_BODY_SELECTOR = '[data-variant="think"][aria-expanded="true"] > * > [class*="thinkBody"], [class*="thinkBody"]'
+/** 思考链内容选择器（仅 running + 展开时）。 */
+const THINK_BODY_SELECTOR = '[data-variant="think"][data-state="running"] [class*="thinkBody"]'
 
-/** 组合内容选择器：主消息 Markdown + 思考链 body。 */
-const CONTENT_SELECTOR = `${MARKDOWN_SELECTOR}, ${THINK_BODY_SELECTOR}`
+/** 思考链摘要选择器（仅 running + 折叠时可见的文字行）。 */
+const THINK_SUMMARY_SELECTOR = '[data-variant="think"][data-state="running"] [class*="summary"]'
+
+/** 组合内容选择器：主消息 Markdown + 思考链 body + 思考链摘要。 */
+const CONTENT_SELECTOR = `${MARKDOWN_SELECTOR}, ${THINK_BODY_SELECTOR}, ${THINK_SUMMARY_SELECTOR}`
 
 /** 一个流式目标的打字机状态。 */
 interface TypewriterSession {
