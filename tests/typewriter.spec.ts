@@ -104,7 +104,7 @@ describe('TypewriterController', () => {
     const overlay = shell.querySelector<HTMLElement>(`.${TYPEWRITER_OVERLAY_CLASS}`)
     expect(overlay).not.toBeNull()
     // 首字符前 clone 完全不参与布局，避免提前出现 Markdown 空框。
-    expect(markdown.style.display).toBe('none')
+    expect(markdown.style.visibility).toBe('hidden')
     expect(overlay!.style.display).toBe('none')
     expect(overlay!.textContent).toBe('')
     expect(overlay!.querySelector('span')).not.toBeNull() // 光标
@@ -251,7 +251,7 @@ describe('TypewriterController', () => {
     await new Promise<void>((resolve) => { setTimeout(resolve, 60) })
 
     expect(typewriter.active).toBe(false)
-    expect(markdown.style.display).toBe('')
+    expect(markdown.style.visibility).toBe('')
     expect(shell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).toBeNull()
     typewriter.dispose()
   })
@@ -435,7 +435,7 @@ describe('TypewriterController', () => {
     await new Promise<void>((resolve) => { setTimeout(resolve, 30) })
     expect(typewriter.active).toBe(false)
     expect(shell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).toBeNull()
-    expect(markdown.style.display).toBe('')
+    expect(markdown.style.visibility).toBe('')
 
     markdown.setAttribute('data-x', '1')
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
@@ -460,6 +460,6 @@ describe('TypewriterController', () => {
 
     typewriter.dispose()
     expect(shell.querySelector(`.${TYPEWRITER_OVERLAY_CLASS}`)).toBeNull()
-    expect(markdown.style.display).toBe('')
+    expect(markdown.style.visibility).toBe('')
   })
 })

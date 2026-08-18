@@ -320,7 +320,7 @@ export class TypewriterController {
     const oldMarkdown = session.markdown
     const oldShell = session.shell
     const newShell = next.parentElement
-    if (oldMarkdown.style.display === 'none') oldMarkdown.style.display = ''
+    this.restoreSourcePositioning(oldMarkdown)
     if (session.overlay !== null && newShell !== null && oldShell !== newShell) {
       oldShell?.removeChild(session.overlay)
       newShell.insertBefore(session.overlay, next)
@@ -340,7 +340,10 @@ export class TypewriterController {
     session.textLengths = this.textLengths(next)
     session.lastGrowthAt = performance.now()
     this.options.onContentChange?.()
-    next.style.display = 'none'
+    next.style.position = 'absolute'
+    next.style.left = '-9999px'
+    next.style.visibility = 'hidden'
+    next.style.pointerEvents = 'none'
     this.sessions.set(next, session)
     this.renderOverlay(session)
     this.ensureStreaming(session)
@@ -441,7 +444,12 @@ export class TypewriterController {
     // Clone the parsed tree so paragraphs, code, and inline Markdown keep their layout.
     shell.insertBefore(overlay, markdown)
     session.overlay = overlay
-    markdown.style.display = 'none'
+    // Hide source offscreen so it retains full layout for re-cloning, but
+    // doesn't occupy flow space or flash its content.
+    markdown.style.position = 'absolute'
+    markdown.style.left = '-9999px'
+    markdown.style.visibility = 'hidden'
+    markdown.style.pointerEvents = 'none'
     this.renderOverlay(session)
   }
 
@@ -526,6 +534,13 @@ export class TypewriterController {
     session.holdTimer = setTimeout(() => { this.teardownSession(session) }, this.options.cursorHold)
   }
 
+  private restoreSourcePositioning(el: HTMLElement): void {
+    if (el.style.position === 'absolute') el.style.position = ''
+    if (el.style.left === '-9999px') el.style.left = ''
+    if (el.style.visibility === 'hidden') el.style.visibility = ''
+    if (el.style.pointerEvents === 'none') el.style.pointerEvents = ''
+  }
+
   private teardownSession(session: TypewriterSession): void {
     clearTimeout(session.settleTimer)
     clearTimeout(session.holdTimer)
@@ -533,7 +548,7 @@ export class TypewriterController {
     session.holdTimer = undefined
     // 恢复原始 Markdown 前通知同一容器的 controller 抑制入场推升。
     this.options.onRestore?.()
-    if (session.markdown.style.display === 'none') session.markdown.style.display = ''
+    this.restoreSourcePositioning(session.markdown)
     if (session.overlay !== null) {
       session.overlay.remove()
       session.overlay = null
