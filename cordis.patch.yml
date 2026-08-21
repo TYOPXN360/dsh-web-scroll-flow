@@ -1,7 +1,7 @@
-# dsh-web-scroll-flow bundle patch: 向 Web 组合插入浏览器插件行。
-#
-# 安装：pnpm dsh plugin --profile web add /mnt/TY/dsh/dsh-web-scroll-flow
-# 卸载：pnpm dsh plugin --profile web remove dsh-web-scroll-flow
+# dsh bundle patch: inserts this plugin into a profile's layer stack.
+# Applied as its own bundle layer once `dsh plugin --profile web add .`
+# reconciles `dsh.profile.bundles` (the package.json `dsh.bundle.patch`
+# declaration drives both the layer membership and this file's role).
 - insert:
     - id: scroll-flow
-      name: dsh-web-scroll-flow
+      name: '@deepseek-ai/dsh-client-ui-scroll-flow'

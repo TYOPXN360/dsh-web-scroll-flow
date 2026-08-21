@@ -1,68 +1,92 @@
 {
-  "name": "dsh-web-scroll-flow",
-  "version": "0.1.0",
-  "description": "DSH Web 对话滚动动效插件：自动跟随滚动平滑过渡（内容向上顶/向下拉的流畅滚动），边缘滚动物理回弹（小幅橡皮筋效果），手动滚动保持原生手感",
+  "name": "@deepseek-ai/dsh-client-ui-scroll-flow",
+  "description": "Streaming scroll transition: smooth animated bottom-follow for the chat view while a model streams, plus its General-settings row",
+  "version": "0.1.0-rc.8",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/client/ui-scroll-flow"
+  },
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": "./lib/client.js",
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
-    "build": "pnpm run clean && tsdown",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run build && git diff --exit-code -- lib"
-  },
-  "files": [
-    "lib/index.js",
-    "lib/index.d.ts",
-    "lib/client.js",
-    "cordis.patch.yml",
-    "README.md"
-  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
       "inject": [
+        "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     }
   },
+  "scripts": {
+    "bundle": "tsdown",
+    "watch": "tsdown --watch",
+    "build": "tsc -b && tsdown",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "clsx": "^2.0.0",
+    "react": "^18.2.0"
+  },
   "peerDependencies": {
-    "@deepseek-ai/cordis": ">=4.0.1 <5",
-    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.5 <0.2",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.5 <0.2",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
     "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "3.18.1",
-    "@types/node": "^22.20.0",
-    "@types/react": "~18.3.31",
-    "jsdom": "^26.1.0",
-    "react": "^18.3.1",
-    "tsdown": "^0.22.14",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-test-runtime": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "~18.3.1",
+    "jsdom": "29.1.1",
+    "lightningcss": "^1.32.0",
+    "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.8",
+    "jsdom": "^26.0.0"
   },
-  "engines": {
-    "node": "^22.19.0 || >=24.0.0"
-  },
-  "packageManager": "pnpm@11.7.0",
-  "license": "MIT"
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts"
+  ]
 }

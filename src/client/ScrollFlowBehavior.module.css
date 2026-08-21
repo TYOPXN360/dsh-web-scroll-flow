@@ -1,0 +1,45 @@
+/* Streaming scroll transition: the behavior component is invisible; the
+   smooth-scroll rules below are its whole effect. The tag only lands while
+   the model streams (see ScrollFlowBehavior), so programmatic scrolls on the
+   tagged scrollport animate during output and stay instant otherwise. */
+
+.anchor {
+  display: none;
+}
+
+/* Vertical: the chat view's own bottom-follow writes
+   (el.scrollTop = el.scrollHeight) animate while the tag is on. */
+:global([data-conversation-scroll][data-scroll-flow]) {
+  scroll-behavior: smooth;
+}
+
+/* Horizontal: a collapsed Think summary under the streaming tail carries
+   `data-follow-end` while ReasoningRow keeps its scrollLeft pinned to the
+   line end (scrollLeft = scrollWidth - clientWidth). `scroll-behavior` is an
+   inherited property, so without this rule the follow-end would inherit the
+   scrollport's `smooth` — and the browser's smooth animation has a fixed
+   minimum duration that cannot keep up with token cadence, making the summary
+   line crawl far behind the text. Pin the follow-end to `auto` instead:
+   each line-end write lands instantly, so the horizontal scroll tracks the
+   tokens at exactly their own speed (the pre-plugin behavior), while the
+   vertical bottom-follow above stays animated. */
+:global([data-conversation-scroll][data-scroll-flow] [data-follow-end]) {
+  scroll-behavior: auto;
+}
+
+/* The running-turn status label ("Deep diving...") is appended to the flow
+   column before pending steering bubbles in DOM order, so an interjection
+   sent while streaming pushes the label up by the bubble's height (pinned
+   follow scrolls the floor down) and drops it back when the message is
+   admitted into the transcript. Flex `order` keeps the label last in paint
+   order instead: the pending bubble lands above it, its own flow offset
+   tracks the growth, and the label's on-screen position never moves. */
+:global([data-conversation-scroll][data-scroll-flow] [data-chat-flow] > [role="status"]) {
+  order: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global([data-conversation-scroll][data-scroll-flow]) {
+    scroll-behavior: auto;
+  }
+}

@@ -4,6 +4,6 @@
  * browser half ships via exports["./client"], discovered through the
  * package.json dshClient declaration.
  */
-
 /** Host plugin body — no host-side behavior for this source plugin. */
-export function apply(): void {}
+export declare function apply(): void;
+//# sourceMappingURL=index.d.ts.map
